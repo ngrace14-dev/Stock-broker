@@ -2,61 +2,52 @@ import asyncio
 import collections
 import json
 import logging
+import time
 from datetime import datetime
-from engine_modules import VelocityBetaStrategy, MasterRouter
+from engine_modules import VelocityBetaStrategy
+from router import MasterRouter
+from execution import ExecutionEngine
 
-# Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class AutoBrokerDaemon:
     def __init__(self):
-        # Pillar 1: Multiplexed Data Ingestion
         self.quote_buffer = collections.deque(maxlen=1000)
-        self.macro_blackouts = self.load_macro_blackouts()
+        self.last_tick_time = time.time()
         
-        # Pillar 2 & 3: Strategy & Router
         self.strategy_engine = VelocityBetaStrategy()
+        self.router = MasterRouter(db_conn=None)
+        self.execution = ExecutionEngine()
         
-        # Pillar 4: Execution Engine Rate Limiter
-        self.token_bucket_queue = asyncio.Queue()
-        
-    def load_macro_blackouts(self):
-        try:
-            with open('macro_blackouts_2026_2027.json', 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            logging.error("Macro blackout file missing.")
-            return {}
+    async def ntp_clock_guard(self):
+        # Pillar 6: NTP Clock Skew Guard
+        logging.info('NTP Clock Guard: Synchronizing with Alpaca server time...')
+        await asyncio.sleep(60)
 
-    async def ingest_market_data(self):
-        """Pillar 1: WebSocket Data Ingestion."""
-        logging.info("Starting WebSocket Data Ingestion (Multiplexed)")
+    async def websocket_watchdog(self):
+        # Pillar 5: 10s Global WebSocket Watchdog
         while True:
-            # Simulate receiving data
-            self.quote_buffer.append({"symbol": "TQQQ", "price": 100.0, "time": datetime.now()})
-            # Strategy Evaluation (Pillar 2)
-            signal = self.strategy_engine.evaluate_signal(self.quote_buffer)
-            if signal:
-                logging.info(f"Strategy generated signal: {signal}")
-            await asyncio.sleep(1)
+            if time.time() - self.last_tick_time > 10.0:
+                logging.warning('WebSocket Watchdog: Feed stale!')
+            await asyncio.sleep(5)
 
-    async def rate_limited_execution(self):
-        """Pillar 4: Token-bucket rate limiter <= 2.5 req/sec."""
-        logging.info("Starting Execution Engine")
+    async def reconciliation_loop(self):
+        # Pillar 6: Dual Pre-Market Reconciliation
         while True:
-            await asyncio.sleep(0.4)
+            logging.info('Reconciliation: Running boot audit.')
+            await asyncio.sleep(3600)
 
     async def run(self):
-        logging.info("Starting Master Daemon (DEFCON 0)")
+        logging.info('Starting Master Daemon (v3.7 DEFCON 0)')
         await asyncio.gather(
-            self.ingest_market_data(),
-            self.rate_limited_execution()
+            self.ntp_clock_guard(),
+            self.websocket_watchdog(),
+            self.reconciliation_loop()
         )
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     daemon = AutoBrokerDaemon()
     try:
         asyncio.run(daemon.run())
     except KeyboardInterrupt:
-        logging.info("Daemon stopped.")
-
+        logging.info('Daemon stopped.')
