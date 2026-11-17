@@ -1,0 +1,30 @@
+{
+  "schema_version": "3.3",
+  "generated_at": "2026-11-16T15:00:00Z",
+  "valid_from": "2026-01-01T00:00:00Z",
+  "expires_at": "2027-12-31T23:59:59Z",
+  "watchdog_warn_days_before_expiry": 14,
+  "blackout_padding_minutes": 30,
+  "events": [
+    {
+      "type": "FOMC",
+      "name": "FOMC Rate Decision",
+      "timestamp_utc": "2026-12-16T19:00:00Z"
+    },
+    {
+      "type": "CPI",
+      "name": "CPI Release",
+      "timestamp_utc": "2026-12-11T13:30:00Z"
+    },
+    {
+      "type": "PPI",
+      "name": "PPI Release",
+      "timestamp_utc": "2026-12-10T13:30:00Z"
+    },
+    {
+      "type": "NFP",
+      "name": "Employment Situation (NFP)",
+      "timestamp_utc": "2026-12-04T13:30:00Z"
+    }
+  ]
+}
