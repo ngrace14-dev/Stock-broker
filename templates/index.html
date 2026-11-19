@@ -415,14 +415,27 @@
 
     <div id="statusToast" class="toast"></div>
 
-    <!-- Clickable Section Navigation Bar -->
-    <nav class="tab-nav" aria-label="Dashboard Sections">
-      <button id="tabBtn-investments" class="tab-btn active" onclick="switchTab('investments')">1. Active Investments (Gains &amp; Losses)</button>
-      <button id="tabBtn-pulse" class="tab-btn" onclick="switchTab('pulse')">2. Autonomous Pulse &amp; Ghost Audit</button>
-      <button id="tabBtn-nodes" class="tab-btn" onclick="switchTab('nodes')">3. Node Fleet &amp; Drip Buckets</button>
-      <button id="tabBtn-matrix" class="tab-btn" onclick="switchTab('matrix')">4. Firewall, ACID Ledger &amp; Escape Valve</button>
-      <button id="tabBtn-trading" class="tab-btn" onclick="switchTab('trading')">5. Manual Execution &amp; Live Wallet</button>
-      <button id="tabBtn-diagnostics" class="tab-btn" onclick="switchTab('diagnostics')">6. Diagnostics &amp; Weak Links</button>
+    <!-- Compact Dropdown Section Selector Bar -->
+    <nav class="tab-nav" aria-label="Dashboard Sections" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+      <div style="display:flex; align-items:center; gap:10px; flex:1; min-width:260px;">
+        <label for="sectionSelector" style="font-size:0.78rem; font-weight:700; color:var(--amber); white-space:nowrap; text-transform:uppercase; letter-spacing:0.5px;">
+          Dashboard View:
+        </label>
+        <select id="sectionSelector" onchange="switchTab(this.value)" style="flex:1; max-width:520px; padding:9px 12px; background:var(--bg-card); color:var(--text-main); border:1px solid var(--accent); border-radius:8px; font-size:0.88rem; font-weight:700; cursor:pointer;">
+          <option value="investments" selected>1. Active Investments (Gains &amp; Losses Tracker)</option>
+          <option value="pulse">2. Autonomous Pulse &amp; Ghost Audit Log</option>
+          <option value="nodes">3. Node Fleet &amp; Drip Buckets</option>
+          <option value="matrix">4. Firewall, ACID Ledger &amp; Escape Valve</option>
+          <option value="trading">5. Manual Execution &amp; Live Wallet</option>
+          <option value="diagnostics">6. Engine Diagnostics &amp; Weak Links</option>
+          <option value="all">★ Show All Sections Stacked (Full Terminal View)</option>
+        </select>
+      </div>
+      <div class="btn-row" style="align-items:center;">
+        <button class="btn-accent" style="padding:7px 12px; font-size:0.78rem;" onclick="cycleDashboardSection(-1)">&larr; Prev View</button>
+        <button class="btn-accent" style="padding:7px 12px; font-size:0.78rem;" onclick="cycleDashboardSection(1)">Next View &rarr;</button>
+        <button style="padding:7px 12px; font-size:0.78rem;" onclick="switchTab('all')">Show All Views</button>
+      </div>
     </nav>
 
     <!-- SECTION 1: Active Investments, Gains & Losses Quick-Check -->
@@ -1005,13 +1018,37 @@
   </div>
 
   <script>
+    const SECTION_ORDER = ['investments', 'pulse', 'nodes', 'matrix', 'trading', 'diagnostics'];
+
     function switchTab(tabKey) {
-      document.querySelectorAll('.tab-section').forEach(sec => sec.classList.remove('active'));
-      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-      const targetSec = document.getElementById('tabSection-' + tabKey);
-      const targetBtn = document.getElementById('tabBtn-' + tabKey);
-      if (targetSec) targetSec.classList.add('active');
-      if (targetBtn) targetBtn.classList.add('active');
+      const sel = document.getElementById('sectionSelector');
+      if (sel && sel.value !== tabKey) {
+        sel.value = tabKey;
+      }
+      document.querySelectorAll('.tab-section').forEach(sec => {
+        if (tabKey === 'all') {
+          sec.classList.add('active');
+          sec.style.display = 'flex';
+        } else {
+          sec.classList.remove('active');
+          sec.style.display = 'none';
+        }
+      });
+      if (tabKey !== 'all') {
+        const targetSec = document.getElementById('tabSection-' + tabKey);
+        if (targetSec) {
+          targetSec.classList.add('active');
+          targetSec.style.display = 'flex';
+        }
+      }
+    }
+
+    function cycleDashboardSection(delta) {
+      const sel = document.getElementById('sectionSelector');
+      const cur = sel ? sel.value : 'investments';
+      const idx = SECTION_ORDER.indexOf(cur);
+      const nextIdx = idx === -1 ? 0 : (idx + delta + SECTION_ORDER.length) % SECTION_ORDER.length;
+      switchTab(SECTION_ORDER[nextIdx]);
     }
     function showToast(msg, isError = false) {
       const el = document.getElementById('statusToast');
