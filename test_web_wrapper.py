@@ -161,7 +161,7 @@ class TestWebWrapperIntegration(unittest.TestCase):
             self.assertIn('unified_investments', st_after)
             self.assertGreater(len(st_after['unified_investments']['items']), 0)
 
-            # Verify Custom Starting Capital ($25.00 Checkpoint Seed) Hard Reset
+            # Verify Custom Starting Capital ($25.00 Checkpoint Seed) Hard Reset & Market Pulse Audit Log
             reset_res = handle_api_post('/api/ghost-reset', {
                 'starting_cash': '25.00',
                 'reset_nodes': True,
@@ -172,6 +172,13 @@ class TestWebWrapperIntegration(unittest.TestCase):
             st_reset = broker_service.get_dashboard_state()
             self.assertEqual(st_reset['ghost_portfolio']['starting_cash'], '25.00')
             self.assertEqual(st_reset['ghost_portfolio']['realized_pnl'], '0.00')
+            self.assertIn('pulse_audit_log', st_reset)
+            self.assertGreater(len(st_reset['pulse_audit_log']), 0)
+            first_audit = st_reset['pulse_audit_log'][0]
+            self.assertIn('rsi', first_audit)
+            self.assertIn('sma', first_audit)
+            self.assertIn('position_state', first_audit)
+            self.assertIn('action_taken', first_audit)
         finally:
             httpd.shutdown()
             httpd.server_close()

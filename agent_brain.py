@@ -41,7 +41,7 @@ class AutonomousAgentBrain:
         self.last_decision_summary = f"[Pulse #{self.pulse_count}] Node #{node_id} ({ticker}): {action} — {detail}"
         return entry
 
-    def run_single_pulse(self, target_node_id=None, override_market_price=None):
+    def run_single_pulse(self, target_node_id=None, override_market_price=None, force_close=False):
         """Execute one autonomous observation, mark-to-market, and trade decision cycle."""
         self.pulse_count += 1
         self.db.record_heartbeat('AUTONOMOUS_AGENT_BRAIN', os.getpid(), 'PULSING')
@@ -84,7 +84,17 @@ class AutonomousAgentBrain:
         price_source = quote['source']
         existing_ghost = open_ghost_map.get(ticker)
         mode_tag = 'LIVE_BROKER' if (exec_mode == 'LIVE' and fund_gate_open) else 'GHOST_PORTFOLIO'
-        return self._execute_node_decision(node, node_id, ticker, market_price, price_source, existing_ghost, mode_tag, fund_gate_open)
+        return self._execute_node_decision(
+            node,
+            node_id,
+            ticker,
+            market_price,
+            price_source,
+            existing_ghost,
+            mode_tag,
+            fund_gate_open,
+            force_close=bool(force_close or override_market_price is not None),
+        )
 
 
     def _compute_fractional_qty(self, node, market_price):
@@ -105,11 +115,43 @@ class AutonomousAgentBrain:
             return Decimal('0.0000')
         return max(Decimal('0.0001'), (target_notional / market_price).quantize(Decimal('0.0001')))
 
-    def _execute_node_decision(self, node, node_id, ticker, market_price, price_source, existing_ghost, mode_tag, fund_gate_open):
+    def _record_pulse_audit(self, node_id, ticker, market_price, price_source, ind, pos_state, action, qty='0.0000', realized_pnl='0.00', reason=''):
+        ghost_eq = self.db.get_ghost_portfolio_summary()['total_equity']
+        self.db.log_market_pulse_audit(
+            pulse_number=self.pulse_count,
+            node_id=node_id,
+            symbol=ticker,
+            market_price=market_price,
+            price_source=price_source,
+            rsi=ind['rsi'],
+            sma=ind['sma'],
+            position_state=pos_state,
+            action_taken=action,
+            qty=qty,
+            realized_pnl=realized_pnl,
+            ghost_equity_after=ghost_eq,
+            reason=reason,
+        )
+
+    def _execute_node_decision(self, node, node_id, ticker, market_price, price_source, existing_ghost, mode_tag, fund_gate_open, force_close=False):
+        eval_res = self.service.strategy.evaluate_position_action(
+            symbol=ticker,
+            current_price=market_price,
+            existing_position=existing_ghost,
+            force_close=force_close,
+        )
+        ind = eval_res['indicators']
+
         if not existing_ghost:
+            if not eval_res['should_buy']:
+                self._record_pulse_audit(node_id, ticker, market_price, price_source, ind, 'FLAT', eval_res['signal'], reason=eval_res['reason'])
+                self._log_reasoning(node_id, ticker, eval_res['signal'], eval_res['reason'])
+                return {'ok': True, 'pulse': self.pulse_count, 'node_id': node_id, 'ticker': ticker, 'action': eval_res['signal'], 'message': self.last_decision_summary}
+
             qty = self._compute_fractional_qty(node, market_price)
             if qty <= Decimal('0.0000'):
                 msg = f'Insufficient Ghost cash to open new {ticker} position.'
+                self._record_pulse_audit(node_id, ticker, market_price, price_source, ind, 'FLAT_LOW_CASH', 'HOLD_CASH_RESERVE', reason=msg)
                 self._log_reasoning(node_id, ticker, 'HOLD_CASH_RESERVE', msg)
                 return {'ok': False, 'pulse': self.pulse_count, 'node_id': node_id, 'ticker': ticker, 'action': 'HOLD_CASH_RESERVE', 'message': msg}
 
@@ -123,7 +165,8 @@ class AutonomousAgentBrain:
                 node_id=node_id,
             )
             action = f'AUTO_BUY ({mode_tag})'
-            detail = f"Bought {qty} {ticker} @ ${market_price:.2f} [{price_source}] | Gate={'OPEN' if fund_gate_open else 'CLOSED'}"
+            detail = f"Invested {qty} {ticker} @ ${market_price:.2f} [{price_source}] | RSI {ind['rsi']} | SMA ${ind['sma']:.2f}"
+            self._record_pulse_audit(node_id, ticker, market_price, price_source, ind, f'OPENED @ ${market_price:.2f}', action, qty=f'{qty:.4f}', reason=detail)
             self._log_reasoning(node_id, ticker, action, detail)
             return {
                 'ok': order_res.get('ok', False),
@@ -139,6 +182,25 @@ class AutonomousAgentBrain:
 
         qty_open = Decimal(str(existing_ghost['qty']))
         avg_entry = Decimal(str(existing_ghost['avg_entry_price']))
+        pos_state_str = f"INVESTED ({qty_open} @ ${avg_entry:.2f} | {eval_res.get('pnl_pct', 0.0):.2f}%)"
+
+        if not eval_res['should_sell']:
+            action = f"HOLD_TREND ({mode_tag})"
+            detail = eval_res['reason']
+            self._record_pulse_audit(node_id, ticker, market_price, price_source, ind, pos_state_str, action, qty=f'{qty_open:.4f}', reason=detail)
+            self._log_reasoning(node_id, ticker, action, detail)
+            return {
+                'ok': True,
+                'pulse': self.pulse_count,
+                'node_id': node_id,
+                'ticker': ticker,
+                'action': action,
+                'market_price': f'{market_price:.2f}',
+                'price_source': price_source,
+                'realized_pnl': '0.00',
+                'message': self.last_decision_summary,
+            }
+
         order_res = self.execution.submit_order(
             symbol=ticker,
             side='sell',
@@ -157,11 +219,12 @@ class AutonomousAgentBrain:
             if drip_res.get('spawned_child'):
                 drip_info += f" (SPAWNED CHILD NODE #{drip_res['spawned_child']['child_node_id']}!)"
 
-        action = f'AUTO_SELL_CLOSE ({mode_tag})'
+        action = f"AUTO_SELL_CLOSE [{eval_res['signal']}] ({mode_tag})"
         detail = (
-            f"Closed {qty_open} {ticker} @ ${market_price:.2f} (Entry ${avg_entry:.2f}) [{price_source}] "
-            f"| Realized P&L: ${realized_dec:.2f}{drip_info}"
+            f"Sold {qty_open} {ticker} @ ${market_price:.2f} (Entry ${avg_entry:.2f}) [{price_source}] "
+            f"| Realized P&L: ${realized_dec:.2f}{drip_info} | {eval_res['reason']}"
         )
+        self._record_pulse_audit(node_id, ticker, market_price, price_source, ind, pos_state_str, action, qty=f'{qty_open:.4f}', realized_pnl=f'{realized_dec:.2f}', reason=detail)
         self._log_reasoning(node_id, ticker, action, detail)
         return {
             'ok': order_res.get('ok', False),
@@ -238,7 +301,20 @@ class AutonomousAgentBrain:
             )
             self.pulse_count += 1
             mode_tag = 'LIVE_BROKER' if (exec_mode == 'LIVE' and fund_gate_open) else 'GHOST_PORTFOLIO'
-            self._log_reasoning(node_id, ticker, f'START_INVESTING ({mode_tag})', f"Deployed {qty} shares @ ${market_price:.2f}")
+            ind = self.service.strategy.compute_indicators(ticker, market_price)
+            detail = f"Fleet Initial Investment: Bought {qty} {ticker} @ ${market_price:.2f} [{quote['source']}] | RSI {ind['rsi']} | SMA ${ind['sma']:.2f}"
+            self._record_pulse_audit(
+                node_id=node_id,
+                ticker=ticker,
+                market_price=market_price,
+                price_source=quote['source'],
+                ind=ind,
+                pos_state=f'OPENED @ ${market_price:.2f}',
+                action=f'START_INVESTING ({mode_tag})',
+                qty=f'{qty:.4f}',
+                reason=detail,
+            )
+            self._log_reasoning(node_id, ticker, f'START_INVESTING ({mode_tag})', detail)
             deployed.append({
                 'node_id': node_id,
                 'ticker': ticker,

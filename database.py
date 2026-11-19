@@ -162,6 +162,24 @@ class BrokerDatabase:
                     audit_hash TEXT NOT NULL,
                     executed_at_utc TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS market_pulse_audit (
+                    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pulse_number INTEGER NOT NULL,
+                    timestamp_utc TEXT NOT NULL,
+                    node_id INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    market_price TEXT NOT NULL,
+                    price_source TEXT NOT NULL,
+                    rsi TEXT NOT NULL DEFAULT '50.0',
+                    sma TEXT NOT NULL DEFAULT '0.00',
+                    position_state TEXT NOT NULL,
+                    action_taken TEXT NOT NULL,
+                    qty TEXT NOT NULL DEFAULT '0.0000',
+                    realized_pnl TEXT NOT NULL DEFAULT '0.00',
+                    ghost_equity_after TEXT NOT NULL DEFAULT '0.00',
+                    reason TEXT NOT NULL
+                );
                 """
             )
             conn.commit()
@@ -689,6 +707,7 @@ class BrokerDatabase:
             conn.execute('DELETE FROM ghost_positions')
             conn.execute('DELETE FROM ghost_trades')
             conn.execute('DELETE FROM orders')
+            conn.execute('DELETE FROM market_pulse_audit')
             conn.execute(
                 """
                 UPDATE agent_settings
@@ -725,3 +744,56 @@ class BrokerDatabase:
             'message': f'Ghost Portfolio cleanly reset to ${cash:.2f} starting capital (0 trades, 0 open positions, pure market-price tracking).',
         }
 
+
+
+    def log_market_pulse_audit(
+        self,
+        pulse_number,
+        node_id,
+        symbol,
+        market_price,
+        price_source,
+        rsi,
+        sma,
+        position_state,
+        action_taken,
+        qty='0.0000',
+        realized_pnl='0.00',
+        ghost_equity_after='0.00',
+        reason='',
+    ):
+        now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO market_pulse_audit (
+                    pulse_number, timestamp_utc, node_id, symbol, market_price, price_source,
+                    rsi, sma, position_state, action_taken, qty, realized_pnl, ghost_equity_after, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(pulse_number),
+                    now_utc,
+                    int(node_id),
+                    str(symbol).upper(),
+                    f'{Decimal(str(market_price)):.2f}',
+                    str(price_source),
+                    str(rsi),
+                    f'{Decimal(str(sma)):.2f}',
+                    str(position_state),
+                    str(action_taken),
+                    str(qty),
+                    f'{Decimal(str(realized_pnl)):.2f}',
+                    f'{Decimal(str(ghost_equity_after)):.2f}',
+                    str(reason),
+                ),
+            )
+            conn.commit()
+
+    def get_market_pulse_audit_log(self, limit=50):
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                'SELECT * FROM market_pulse_audit ORDER BY audit_id DESC LIMIT ?',
+                (int(limit),),
+            ).fetchall()
+            return [dict(r) for r in rows]

@@ -488,6 +488,36 @@
             </table>
           </div>
         </div>
+
+        <div style="margin-top:10px;">
+          <div class="panel-header">
+            <div>
+              <div class="quadrant-tag">Market Pulse vs. Trade Decision Audit Trail</div>
+              <span class="panel-title">Live Market Pulse &amp; State Audit Log (When &amp; Why Positions Were Invested, Held, or Sold)</span>
+            </div>
+            <span class="badge green">ALPHA V1: RSI + SMA + TRAILING RATCHET</span>
+          </div>
+          <div class="table-wrap" style="max-height:260px; overflow-y:auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Pulse #</th>
+                  <th>Timestamp (UTC)</th>
+                  <th>Node / Symbol</th>
+                  <th>Market Quote</th>
+                  <th>RSI / SMA</th>
+                  <th>Position State</th>
+                  <th>Action Taken</th>
+                  <th>Shares</th>
+                  <th>Realized P&amp;L</th>
+                  <th>Ghost Equity</th>
+                  <th>Audit Reasoning</th>
+                </tr>
+              </thead>
+              <tbody id="pulseAuditBodyTab1"></tbody>
+            </table>
+          </div>
+        </div>
       </section>
     </div>
 
@@ -566,6 +596,32 @@
               <tbody id="ghostTradesBody"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;">
+        <div class="panel-header">
+          <span class="panel-title">Market Pulse &amp; State Audit Log (Pulse-by-Pulse Market State vs. Invested / Held / Sold Action)</span>
+        </div>
+        <div class="table-wrap" style="max-height:240px; overflow-y:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Pulse #</th>
+                <th>Timestamp (UTC)</th>
+                <th>Node / Symbol</th>
+                <th>Market Quote</th>
+                <th>RSI / SMA</th>
+                <th>Position State</th>
+                <th>Action Taken</th>
+                <th>Shares</th>
+                <th>Realized P&amp;L</th>
+                <th>Ghost Equity</th>
+                <th>Audit Reasoning</th>
+              </tr>
+            </thead>
+            <tbody id="pulseAuditBodyTab2"></tbody>
+          </table>
         </div>
       </div>
       </section>
@@ -1140,6 +1196,40 @@
           }
         }
 
+        const renderPulseAuditRows = (tbodyId) => {
+          const tb = document.getElementById(tbodyId);
+          if (!tb) return;
+          tb.innerHTML = '';
+          const logs = data.pulse_audit_log || [];
+          logs.slice(0, 35).forEach(row => {
+            const rp = parseFloat(row.realized_pnl || '0');
+            const act = row.action_taken || '';
+            let badgeClass = 'amber';
+            if (act.includes('BUY') || act.includes('INVESTING')) badgeClass = 'green';
+            else if (act.includes('SELL')) badgeClass = rp >= 0 ? 'green' : 'red';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td><strong>#${row.pulse_number}</strong></td>
+              <td style="font-size:0.74rem; color:var(--text-muted);">${row.timestamp_utc}</td>
+              <td>Node #${row.node_id} (<strong>${row.symbol}</strong>)</td>
+              <td>$${row.market_price}</td>
+              <td>RSI ${row.rsi} / SMA $${row.sma}</td>
+              <td>${row.position_state}</td>
+              <td><span class="badge ${badgeClass}">${act}</span></td>
+              <td>${row.qty}</td>
+              <td style="color:${rp > 0 ? 'var(--green)' : (rp < 0 ? 'var(--red)' : 'var(--text-muted)')}; font-weight:700;">$${row.realized_pnl}</td>
+              <td><strong>$${row.ghost_equity_after}</strong></td>
+              <td style="font-size:0.74rem; color:var(--text-muted); max-width:340px; white-space:normal;">${row.reason}</td>
+            `;
+            tb.appendChild(tr);
+          });
+          if (!logs.length) {
+            tb.innerHTML = '<tr><td colspan="11" style="color:var(--text-muted)">No market pulses recorded yet — click "Cycle / Mark-to-Market Now" or wait for auto-pulse</td></tr>';
+          }
+        };
+        renderPulseAuditRows('pulseAuditBodyTab1');
+        renderPulseAuditRows('pulseAuditBodyTab2');
+
         const modeBadge = document.getElementById('modeBadge');
         modeBadge.textContent = 'MODE: ' + (acct.mode || 'SANDBOX');
         modeBadge.className = 'badge ' + (acct.connected ? 'green' : 'amber');
@@ -1557,7 +1647,7 @@
 
     async function closeActiveInvestment(mode, symbol, qty, nodeId, currentPrice) {
       if (mode === 'GHOST') {
-        const res = await apiPost('/api/agent-pulse', { node_id: nodeId, override_market_price: currentPrice });
+        const res = await apiPost('/api/agent-pulse', { node_id: nodeId, override_market_price: currentPrice, force_close: true });
         showToast(res.message || `Closed Ghost investment ${symbol}`, !res.ok);
       } else {
         const res = await apiPost('/api/flatten', { symbol: symbol, reason: 'QUICK_CHECK_REALIZE_PNL' });

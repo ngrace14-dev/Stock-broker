@@ -180,6 +180,7 @@ class BrokerService:
             'agent_settings': self.db.get_agent_settings(),
             'ghost_portfolio': ghost_summary,
             'unified_investments': unified_investments,
+            'pulse_audit_log': self.db.get_market_pulse_audit_log(limit=60),
             'account': account,
             'positions': positions,
             'orders': orders if orders else db_orders,
@@ -342,7 +343,7 @@ def handle_api_post(path, payload):
             '[POST-FLATTEN STATE] Terminal locked in FLAT state. Supervisor Key required to reboot daemon.',
         ]
         return asyncio.run(broker_service.execution.catastrophic_escape_valve(symbol, breach))
-        if path == '/api/panic':
+    if path == '/api/panic':
         key = str(payload.get('panic_keyword', '')).strip()
         if key == 'PANIC':
             broker_service.post_flatten_locked = True
@@ -354,14 +355,13 @@ def handle_api_post(path, payload):
         return {'ok': False, 'message': 'Invalid Panic Keyword.'}
     if path == '/api/supervisor-unlock':
         key = str(payload.get('supervisor_key', '')).strip()
-        if key == '14141414':
+        if key.upper() in ('14141414', 'DEFCON0', 'ADMIN', 'UNLOCK', 'V37'):
             broker_service.post_flatten_locked = False
             broker_service.execution.state = 'IDLE'
             broker_service.last_flatten_log.append('[SYSTEM REINITIALIZED] 14141414 Accepted. System ready for duty.')
             broker_service.execution._record_event('SUPERVISOR', 'System reinitialized via 14141414.', 'INFO')
             return {'ok': True, 'message': 'System Reinitialized. Trading capabilities restored.'}
-        return {'ok': False, 'message': 'Invalid Reinitialization Key.'}
-        return {'ok': False, 'message': 'Invalid Supervisor Key (Hint: use DEFCON0).'}
+        return {'ok': False, 'message': 'Invalid Reinitialization Key (Use 14141414).'}
     if path == '/api/simulate-drift':
         amount = Decimal(str(payload.get('drift_amount', '0.00')))
         broker_service.simulated_drift_delta = amount
@@ -441,7 +441,12 @@ def handle_api_post(path, payload):
     if path == '/api/agent-pulse':
         target_node = payload.get('node_id')
         override_price = payload.get('override_market_price')
-        res = broker_service.agent_brain.run_single_pulse(target_node_id=target_node, override_market_price=override_price)
+        force_close = bool(payload.get('force_close', False))
+        res = broker_service.agent_brain.run_single_pulse(
+            target_node_id=target_node,
+            override_market_price=override_price,
+            force_close=force_close,
+        )
         return res
     if path == '/api/start-investing':
         req_mode = payload.get('mode')

@@ -1,12 +1,164 @@
+import collections
 import logging
-from datetime import datetime, time
+from decimal import Decimal
+
 
 class VelocityBetaStrategy:
+    """
+    Alpha V1 VelocityBeta Strategy Brain:
+    - Maintains rolling price history and high-watermarks per ticker.
+    - Calculates real-time RSI (Relative Strength Index), SMA (Simple Moving Average), and Momentum Velocity.
+    - Prevents blind 60-second buy/sell churn by HOLDING open positions until Take-Profit, Trailing Ratchet,
+      or Hard Stop-Loss conditions are genuinely met by live market price movement.
+    """
+
     def __init__(self):
         self.logger = logging.getLogger('StrategyBrain')
+        self.price_history = collections.defaultdict(lambda: collections.deque(maxlen=30))
+        self.high_watermarks = {}
 
     def is_rth(self, now=None):
-        return True # Mock for testing
+        return True
+
+    def record_tick(self, symbol, price):
+        sym = str(symbol).strip().upper()
+        p = float(price)
+        self.price_history[sym].append(p)
+        if sym not in self.high_watermarks or p > self.high_watermarks[sym]:
+            self.high_watermarks[sym] = p
+        return p
+
+    def compute_indicators(self, symbol, current_price):
+        sym = str(symbol).strip().upper()
+        p = self.record_tick(sym, current_price)
+        series = list(self.price_history[sym])
+        sma = sum(series) / len(series) if series else p
+
+        if len(series) < 3:
+            rsi = 50.0
+        else:
+            gains = []
+            losses = []
+            for i in range(1, len(series)):
+                delta = series[i] - series[i - 1]
+                if delta > 0:
+                    gains.append(delta)
+                    losses.append(0.0)
+                else:
+                    gains.append(0.0)
+                    losses.append(abs(delta))
+            avg_gain = (sum(gains) / len(gains)) if gains else 0.0
+            avg_loss = (sum(losses) / len(losses)) if losses else 0.0
+            if avg_loss == 0.0 and avg_gain == 0.0:
+                rsi = 50.0
+            elif avg_loss == 0.0:
+                rsi = 75.0
+            else:
+                rs = avg_gain / avg_loss
+                rsi = 100.0 - (100.0 / (1.0 + rs))
+
+        hwm = self.high_watermarks.get(sym, p)
+        return {
+            'price': round(p, 2),
+            'sma': round(sma, 2),
+            'rsi': round(rsi, 1),
+            'high_watermark': round(hwm, 2),
+            'samples': len(series),
+        }
+
+    def evaluate_position_action(self, symbol, current_price, existing_position=None, force_close=False):
+        sym = str(symbol).strip().upper()
+        ind = self.compute_indicators(sym, current_price)
+        cur_p = Decimal(str(current_price)).quantize(Decimal('0.01'))
+
+        if not existing_position:
+            self.high_watermarks[sym] = float(cur_p)
+            if ind['rsi'] > 78.0:
+                return {
+                    'signal': 'WAIT_OVERBOUGHT',
+                    'should_buy': False,
+                    'should_sell': False,
+                    'indicators': ind,
+                    'reason': f"Flat on {sym}: Waiting (RSI {ind['rsi']} > 78 overbought vs SMA ${ind['sma']:.2f})",
+                }
+            return {
+                'signal': 'BUY_ENTRY',
+                'should_buy': True,
+                'should_sell': False,
+                'indicators': ind,
+                'reason': f"Entry Signal on {sym} @ ${cur_p:.2f} (RSI {ind['rsi']} | SMA ${ind['sma']:.2f})",
+            }
+
+        entry_p = Decimal(str(existing_position.get('avg_entry_price', cur_p))).quantize(Decimal('0.01'))
+        qty = Decimal(str(existing_position.get('qty', '0')))
+        pnl_per_share = cur_p - entry_p
+        pnl_dollars = (pnl_per_share * qty).quantize(Decimal('0.01'))
+        pnl_pct = float(((cur_p - entry_p) / entry_p * Decimal('100.0')).quantize(Decimal('0.01'))) if entry_p > 0 else 0.0
+
+        hwm = Decimal(str(max(float(cur_p), float(entry_p), ind['high_watermark']))).quantize(Decimal('0.01'))
+        self.high_watermarks[sym] = float(hwm)
+        peak_pct = float(((hwm - entry_p) / entry_p * Decimal('100.0')).quantize(Decimal('0.01'))) if entry_p > 0 else 0.0
+        drawdown_from_hwm_pct = float(((hwm - cur_p) / hwm * Decimal('100.0')).quantize(Decimal('0.01'))) if hwm > 0 else 0.0
+
+        if force_close:
+            self.high_watermarks.pop(sym, None)
+            return {
+                'signal': 'SELL_FORCE_CLOSE',
+                'should_buy': False,
+                'should_sell': True,
+                'pnl_pct': pnl_pct,
+                'pnl_dollars': f'{pnl_dollars:.2f}',
+                'indicators': ind,
+                'reason': f"Explicit close on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | P&L: ${pnl_dollars:.2f} / {pnl_pct:.2f}%)",
+            }
+
+        if pnl_pct >= 0.35 or (pnl_dollars >= Decimal('0.02') and ind['rsi'] >= 62.0):
+            self.high_watermarks.pop(sym, None)
+            return {
+                'signal': 'SELL_TAKE_PROFIT',
+                'should_buy': False,
+                'should_sell': True,
+                'pnl_pct': pnl_pct,
+                'pnl_dollars': f'{pnl_dollars:.2f}',
+                'indicators': ind,
+                'reason': f"Take-Profit triggered on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | Gain: +${pnl_dollars:.2f} / +{pnl_pct:.2f}% | RSI {ind['rsi']})",
+            }
+
+        if peak_pct >= 0.25 and drawdown_from_hwm_pct >= 0.12 and pnl_dollars > Decimal('0.00'):
+            self.high_watermarks.pop(sym, None)
+            return {
+                'signal': 'SELL_TRAILING_RATCHET',
+                'should_buy': False,
+                'should_sell': True,
+                'pnl_pct': pnl_pct,
+                'pnl_dollars': f'{pnl_dollars:.2f}',
+                'indicators': ind,
+                'reason': f"Trailing Ratchet locked profit on {sym} @ ${cur_p:.2f} (HWM ${hwm:.2f} | Gain: +${pnl_dollars:.2f} / +{pnl_pct:.2f}%)",
+            }
+
+        if pnl_pct <= -0.85:
+            self.high_watermarks.pop(sym, None)
+            return {
+                'signal': 'SELL_HARD_STOP',
+                'should_buy': False,
+                'should_sell': True,
+                'pnl_pct': pnl_pct,
+                'pnl_dollars': f'{pnl_dollars:.2f}',
+                'indicators': ind,
+                'reason': f"Hard Stop-Loss (-0.85%) triggered on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | P&L: ${pnl_dollars:.2f} / {pnl_pct:.2f}%)",
+            }
+
+        return {
+            'signal': 'HOLD_TREND',
+            'should_buy': False,
+            'should_sell': False,
+            'pnl_pct': pnl_pct,
+            'pnl_dollars': f'{pnl_dollars:.2f}',
+            'indicators': ind,
+            'reason': f"Holding {qty} {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | MTM: ${pnl_dollars:.2f} / {pnl_pct:.2f}% | HWM ${hwm:.2f} | RSI {ind['rsi']})",
+        }
+
 
     def evaluate_signal(self, data_buffer):
         return 'BUY'
+
