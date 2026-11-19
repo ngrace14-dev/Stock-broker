@@ -302,7 +302,10 @@ class AutonomousAgentBrain:
             self.pulse_count += 1
             mode_tag = 'LIVE_BROKER' if (exec_mode == 'LIVE' and fund_gate_open) else 'GHOST_PORTFOLIO'
             ind = self.service.strategy.compute_indicators(ticker, market_price)
-            detail = f"Fleet Initial Investment: Bought {qty} {ticker} @ ${market_price:.2f} [{quote['source']}] | RSI {ind['rsi']} | SMA ${ind['sma']:.2f}"
+            detail = (
+                f"Fleet Initial Investment: Bought {qty} {ticker} @ ${market_price:.2f} [{quote['source']}] "
+                f"| RSI {ind['rsi']} | SMA ${ind['sma']:.2f} | Spread {ind.get('sma_spread_pct', 0.0):+.2f}% [DIAG: INITIAL_DEPLOY]"
+            )
             self._record_pulse_audit(
                 node_id=node_id,
                 ticker=ticker,

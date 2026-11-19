@@ -58,9 +58,11 @@ class VelocityBetaStrategy:
                 rsi = 100.0 - (100.0 / (1.0 + rs))
 
         hwm = self.high_watermarks.get(sym, p)
+        sma_spread_pct = ((p - sma) / sma * 100.0) if sma > 0 else 0.0
         return {
             'price': round(p, 2),
             'sma': round(sma, 2),
+            'sma_spread_pct': round(sma_spread_pct, 2),
             'rsi': round(rsi, 1),
             'high_watermark': round(hwm, 2),
             'samples': len(series),
@@ -70,6 +72,7 @@ class VelocityBetaStrategy:
         sym = str(symbol).strip().upper()
         ind = self.compute_indicators(sym, current_price)
         cur_p = Decimal(str(current_price)).quantize(Decimal('0.01'))
+        sma_spread = ind['sma_spread_pct']
 
         if not existing_position:
             self.high_watermarks[sym] = float(cur_p)
@@ -79,14 +82,17 @@ class VelocityBetaStrategy:
                     'should_buy': False,
                     'should_sell': False,
                     'indicators': ind,
-                    'reason': f"Flat on {sym}: Waiting (RSI {ind['rsi']} > 78 overbought vs SMA ${ind['sma']:.2f})",
+                    'performance_tag': 'DISCIPLINED_FILTER',
+                    'reason': f"Flat on {sym}: Waiting (RSI {ind['rsi']} > 78 overbought vs SMA ${ind['sma']:.2f} | Spread {sma_spread:+.2f}%) [DIAG: DISCIPLINED_FILTER]",
                 }
+            entry_tag = 'OVEREXTENDED_ENTRY' if (ind['rsi'] >= 65.0 or sma_spread > 0.35) else 'DISCIPLINED_ENTRY'
             return {
                 'signal': 'BUY_ENTRY',
                 'should_buy': True,
                 'should_sell': False,
                 'indicators': ind,
-                'reason': f"Entry Signal on {sym} @ ${cur_p:.2f} (RSI {ind['rsi']} | SMA ${ind['sma']:.2f})",
+                'performance_tag': entry_tag,
+                'reason': f"Entry Signal on {sym} @ ${cur_p:.2f} (RSI {ind['rsi']} | SMA ${ind['sma']:.2f} | Spread {sma_spread:+.2f}%) [DIAG: {entry_tag}]",
             }
 
         entry_p = Decimal(str(existing_position.get('avg_entry_price', cur_p))).quantize(Decimal('0.01'))
@@ -99,6 +105,7 @@ class VelocityBetaStrategy:
         self.high_watermarks[sym] = float(hwm)
         peak_pct = float(((hwm - entry_p) / entry_p * Decimal('100.0')).quantize(Decimal('0.01'))) if entry_p > 0 else 0.0
         drawdown_from_hwm_pct = float(((hwm - cur_p) / hwm * Decimal('100.0')).quantize(Decimal('0.01'))) if hwm > 0 else 0.0
+        giveback_pct = round(max(0.0, peak_pct - pnl_pct), 2)
 
         if force_close:
             self.high_watermarks.pop(sym, None)
@@ -108,8 +115,11 @@ class VelocityBetaStrategy:
                 'should_sell': True,
                 'pnl_pct': pnl_pct,
                 'pnl_dollars': f'{pnl_dollars:.2f}',
+                'peak_pct': peak_pct,
+                'giveback_pct': giveback_pct,
+                'performance_tag': 'MANUAL_OR_FORCE_EXIT',
                 'indicators': ind,
-                'reason': f"Explicit close on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | P&L: ${pnl_dollars:.2f} / {pnl_pct:.2f}%)",
+                'reason': f"Explicit close on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | P&L: ${pnl_dollars:.2f} / {pnl_pct:.2f}% | Peak +{peak_pct:.2f}% / Giveback {giveback_pct:.2f}%)",
             }
 
         if pnl_pct >= 0.35 or (pnl_dollars >= Decimal('0.02') and ind['rsi'] >= 62.0):
@@ -120,8 +130,11 @@ class VelocityBetaStrategy:
                 'should_sell': True,
                 'pnl_pct': pnl_pct,
                 'pnl_dollars': f'{pnl_dollars:.2f}',
+                'peak_pct': peak_pct,
+                'giveback_pct': giveback_pct,
+                'performance_tag': 'STRONG_PROFIT_LOCK',
                 'indicators': ind,
-                'reason': f"Take-Profit triggered on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | Gain: +${pnl_dollars:.2f} / +{pnl_pct:.2f}% | RSI {ind['rsi']})",
+                'reason': f"Take-Profit triggered on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | Gain: +${pnl_dollars:.2f} / +{pnl_pct:.2f}% | RSI {ind['rsi']} | Spread {sma_spread:+.2f}%) [DIAG: STRONG_PROFIT_LOCK]",
             }
 
         if peak_pct >= 0.25 and drawdown_from_hwm_pct >= 0.12 and pnl_dollars > Decimal('0.00'):
@@ -132,21 +145,37 @@ class VelocityBetaStrategy:
                 'should_sell': True,
                 'pnl_pct': pnl_pct,
                 'pnl_dollars': f'{pnl_dollars:.2f}',
+                'peak_pct': peak_pct,
+                'giveback_pct': giveback_pct,
+                'performance_tag': 'STRONG_RATCHET_SAVE',
                 'indicators': ind,
-                'reason': f"Trailing Ratchet locked profit on {sym} @ ${cur_p:.2f} (HWM ${hwm:.2f} | Gain: +${pnl_dollars:.2f} / +{pnl_pct:.2f}%)",
+                'reason': f"Trailing Ratchet locked profit on {sym} @ ${cur_p:.2f} (HWM ${hwm:.2f} | Gain: +${pnl_dollars:.2f} / +{pnl_pct:.2f}% | Giveback {giveback_pct:.2f}%) [DIAG: STRONG_RATCHET_SAVE]",
             }
 
         if pnl_pct <= -0.85:
             self.high_watermarks.pop(sym, None)
+            stop_tag = 'WEAK_REVERSAL_FROM_PEAK' if peak_pct >= 0.15 else 'WEAK_HARD_STOP'
             return {
                 'signal': 'SELL_HARD_STOP',
                 'should_buy': False,
                 'should_sell': True,
                 'pnl_pct': pnl_pct,
                 'pnl_dollars': f'{pnl_dollars:.2f}',
+                'peak_pct': peak_pct,
+                'giveback_pct': giveback_pct,
+                'performance_tag': stop_tag,
                 'indicators': ind,
-                'reason': f"Hard Stop-Loss (-0.85%) triggered on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | P&L: ${pnl_dollars:.2f} / {pnl_pct:.2f}%)",
+                'reason': f"Hard Stop-Loss (-0.85%) triggered on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | P&L: ${pnl_dollars:.2f} / {pnl_pct:.2f}% | Peak +{peak_pct:.2f}% / Giveback {giveback_pct:.2f}%) [DIAG: {stop_tag}]",
             }
+
+        if peak_pct >= 0.20 and pnl_pct <= 0.0:
+            hold_tag = 'WEAK_PROFIT_GIVEBACK'
+        elif pnl_pct <= -0.45:
+            hold_tag = 'WEAK_UNDERWATER_HOLD'
+        elif pnl_pct > 0.0 and sma_spread >= 0.0:
+            hold_tag = 'STRONG_TREND_HOLD'
+        else:
+            hold_tag = 'NEUTRAL_CONSOLIDATION'
 
         return {
             'signal': 'HOLD_TREND',
@@ -154,8 +183,14 @@ class VelocityBetaStrategy:
             'should_sell': False,
             'pnl_pct': pnl_pct,
             'pnl_dollars': f'{pnl_dollars:.2f}',
+            'peak_pct': peak_pct,
+            'giveback_pct': giveback_pct,
+            'performance_tag': hold_tag,
             'indicators': ind,
-            'reason': f"Holding {qty} {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | MTM: ${pnl_dollars:.2f} / {pnl_pct:.2f}% | HWM ${hwm:.2f} | RSI {ind['rsi']})",
+            'reason': (
+                f"Holding {qty} {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | MTM: ${pnl_dollars:.2f} / {pnl_pct:.2f}% "
+                f"| HWM ${hwm:.2f} / Peak +{peak_pct:.2f}% / Giveback {giveback_pct:.2f}% | RSI {ind['rsi']} | Spread {sma_spread:+.2f}%) [DIAG: {hold_tag}]"
+            ),
         }
 
 

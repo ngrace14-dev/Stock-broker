@@ -181,6 +181,7 @@ class BrokerService:
             'ghost_portfolio': ghost_summary,
             'unified_investments': unified_investments,
             'pulse_audit_log': self.db.get_market_pulse_audit_log(limit=60),
+            'engine_diagnostics': self.db.get_engine_diagnostics(),
             'account': account,
             'positions': positions,
             'orders': orders if orders else db_orders,

@@ -179,6 +179,9 @@ class TestWebWrapperIntegration(unittest.TestCase):
             self.assertIn('sma', first_audit)
             self.assertIn('position_state', first_audit)
             self.assertIn('action_taken', first_audit)
+            self.assertIn('[DIAG:', first_audit['reason'])
+            self.assertIn('engine_diagnostics', st_reset)
+            self.assertGreater(len(st_reset['engine_diagnostics']['node_reports']), 0)
         finally:
             httpd.shutdown()
             httpd.server_close()

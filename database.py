@@ -797,3 +797,94 @@ class BrokerDatabase:
                 (int(limit),),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def get_engine_diagnostics(self):
+        """
+        Aggregates per-node and fleet-wide performance telemetry from market_pulse_audit,
+        ghost_trades, ghost_positions, and nodes to pinpoint exactly where the engine is strong vs. weak.
+        """
+        with self._lock, self._connect() as conn:
+            nodes = [dict(r) for r in conn.execute('SELECT * FROM nodes ORDER BY node_id ASC').fetchall()]
+            positions = {r['symbol']: dict(r) for r in conn.execute('SELECT * FROM ghost_positions').fetchall()}
+            trades = [dict(r) for r in conn.execute('SELECT * FROM ghost_trades ORDER BY trade_id DESC LIMIT 200').fetchall()]
+            pulses = [dict(r) for r in conn.execute('SELECT * FROM market_pulse_audit ORDER BY audit_id DESC LIMIT 200').fetchall()]
+
+        node_reports = []
+        strong_count = 0
+        weak_count = 0
+
+        for n in nodes:
+            nid = int(n['node_id'])
+            sym = str(n['assigned_ticker']).upper()
+            n_trades = [t for t in trades if int(t['node_id']) == nid or str(t['symbol']).upper() == sym]
+            sells = [t for t in n_trades if str(t['side']).lower() == 'sell']
+            wins = [t for t in sells if Decimal(str(t['realized_pnl'])) > Decimal('0.00')]
+            losses = [t for t in sells if Decimal(str(t['realized_pnl'])) < Decimal('0.00')]
+            realized_sum = sum((Decimal(str(t['realized_pnl'])) for t in sells), Decimal('0.00'))
+
+            n_pulses = [p for p in pulses if int(p['node_id']) == nid or str(p['symbol']).upper() == sym]
+            hard_stops = sum(1 for p in n_pulses if 'SELL_HARD_STOP' in str(p['action_taken']))
+            take_profits = sum(1 for p in n_pulses if 'SELL_TAKE_PROFIT' in str(p['action_taken']) or 'SELL_TRAILING_RATCHET' in str(p['action_taken']))
+            giveback_warnings = sum(1 for p in n_pulses if 'WEAK_PROFIT_GIVEBACK' in str(p['reason']) or 'WEAK_REVERSAL_FROM_PEAK' in str(p['reason']))
+
+            pos = positions.get(sym)
+            unrl_pnl = Decimal(str(pos['unrealized_pnl'])) if pos else Decimal('0.00')
+            unrl_pct = Decimal(str(pos['unrealized_pnl_pct'])) if pos else Decimal('0.00')
+            net_node_pnl = (realized_sum + unrl_pnl).quantize(Decimal('0.01'))
+
+            latest_pulse = n_pulses[0] if n_pulses else None
+            latest_rsi = float(latest_pulse['rsi']) if latest_pulse else 50.0
+            latest_price = Decimal(str(latest_pulse['market_price'])) if latest_pulse else Decimal('0.00')
+            latest_sma = Decimal(str(latest_pulse['sma'])) if latest_pulse else Decimal('0.00')
+            sma_spread_pct = float(((latest_price - latest_sma) / latest_sma * Decimal('100.0')).quantize(Decimal('0.01'))) if latest_sma > 0 else 0.0
+
+            drip_bucket = Decimal(str(n.get('drip_bucket', '0.00')))
+            drip_target = Decimal(str(n.get('drip_target', '50.00')))
+            drip_remaining = max(Decimal('0.00'), drip_target - drip_bucket)
+            avg_win = (sum((Decimal(str(w['realized_pnl'])) for w in wins), Decimal('0.00')) / Decimal(str(len(wins)))).quantize(Decimal('0.01')) if wins else Decimal('0.05')
+            est_trades_to_spawn = int((drip_remaining / max(Decimal('0.01'), avg_win)).to_integral_value())
+
+            if net_node_pnl > Decimal('0.00') or (take_profits > hard_stops and unrl_pct >= Decimal('0.00')):
+                verdict = 'STRONG_PERFORMER'
+                strong_count += 1
+                diagnosis = f'Positive capture (+${net_node_pnl:.2f} net | {take_profits} TP vs {hard_stops} Stop). Trend spread {sma_spread_pct:+.2f}%.'
+            elif hard_stops > take_profits or net_node_pnl < Decimal('-0.02') or unrl_pct <= Decimal('-0.45'):
+                verdict = 'WEAK_LINK_DRAWDOWN'
+                weak_count += 1
+                diagnosis = f'Drawdown / Stop vulnerability (${net_node_pnl:.2f} net | {hard_stops} Hard Stops | Giveback alerts: {giveback_warnings}).'
+            elif giveback_warnings > 0:
+                verdict = 'WEAK_HOLD_GIVEBACK'
+                weak_count += 1
+                diagnosis = f'Peak profit giveback detected ({giveback_warnings} pulses). Tighten ratchet or lower RSI take-profit threshold.'
+            else:
+                verdict = 'NEUTRAL_INCUBATING'
+                diagnosis = f'Consolidating near SMA (Spread {sma_spread_pct:+.2f}% | RSI {latest_rsi:.1f}). Awaiting trend expansion.'
+
+            node_reports.append({
+                'node_id': nid,
+                'symbol': sym,
+                'division': n.get('division', ''),
+                'verdict': verdict,
+                'closed_trades': len(sells),
+                'wins': len(wins),
+                'losses': len(losses),
+                'take_profits': take_profits,
+                'hard_stops': hard_stops,
+                'giveback_warnings': giveback_warnings,
+                'realized_pnl': f'{realized_sum:.2f}',
+                'unrealized_pnl': f'{unrl_pnl:.2f}',
+                'unrealized_pct': f'{unrl_pct:.2f}%',
+                'net_pnl': f'{net_node_pnl:.2f}',
+                'sma_spread_pct': f'{sma_spread_pct:+.2f}%',
+                'latest_rsi': f'{latest_rsi:.1f}',
+                'drip_progress': f'${drip_bucket:.2f} / ${drip_target:.2f}',
+                'est_wins_to_spawn': est_trades_to_spawn,
+                'diagnosis': diagnosis,
+            })
+
+        return {
+            'strong_nodes_count': strong_count,
+            'weak_nodes_count': weak_count,
+            'total_evaluated': len(node_reports),
+            'node_reports': node_reports,
+        }

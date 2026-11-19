@@ -775,6 +775,38 @@
 
     <!-- SECTION 5: Infrastructure & "Weak Link" Diagnostics -->
     <div id="tabSection-diagnostics" class="tab-section">
+      <section class="panel" style="margin-bottom:14px;">
+        <div class="panel-header">
+          <div>
+            <div class="quadrant-tag">Strategy &amp; Node Telemetry // Weak vs. Strong Links</div>
+            <span class="panel-title">Engine Strength, Drawdown &amp; Profit-Giveback Diagnostics</span>
+          </div>
+          <div class="btn-row">
+            <span class="badge green" id="diagStrongCountBadge">Strong: 0</span>
+            <span class="badge red" id="diagWeakCountBadge">Weak Links: 0</span>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Node / Symbol</th>
+                <th>Engine Verdict</th>
+                <th>TP / Hard Stops</th>
+                <th>Giveback Alerts</th>
+                <th>Realized P&amp;L</th>
+                <th>Open MTM</th>
+                <th>Net Node P&amp;L</th>
+                <th>SMA Spread / RSI</th>
+                <th>Drip Spawn Velocity</th>
+                <th>Diagnostic Prescription</th>
+              </tr>
+            </thead>
+            <tbody id="engineDiagnosticsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
       <aside class="panel">
         <div class="panel-header">
           <div>
@@ -1440,6 +1472,36 @@
           `;
           nodesBody.appendChild(tr);
         });
+
+        const engDiag = data.engine_diagnostics || {};
+        const strongBadge = document.getElementById('diagStrongCountBadge');
+        const weakBadge = document.getElementById('diagWeakCountBadge');
+        if (strongBadge) strongBadge.textContent = `Strong Nodes: ${engDiag.strong_nodes_count || 0}`;
+        if (weakBadge) weakBadge.textContent = `Weak Links: ${engDiag.weak_nodes_count || 0}`;
+        const diagBody = document.getElementById('engineDiagnosticsBody');
+        if (diagBody) {
+          diagBody.innerHTML = '';
+          (engDiag.node_reports || []).forEach(r => {
+            const netVal = parseFloat(r.net_pnl || '0');
+            let vBadge = 'amber';
+            if ((r.verdict || '').includes('STRONG')) vBadge = 'green';
+            else if ((r.verdict || '').includes('WEAK')) vBadge = 'red';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td>Node #${r.node_id} (<strong>${r.symbol}</strong>)</td>
+              <td><span class="badge ${vBadge}">${r.verdict}</span></td>
+              <td><span style="color:var(--green);font-weight:700;">${r.take_profits} TP</span> / <span style="color:var(--red);font-weight:700;">${r.hard_stops} Stop</span></td>
+              <td>${r.giveback_warnings}</td>
+              <td>$${r.realized_pnl}</td>
+              <td>$${r.unrealized_pnl} (${r.unrealized_pct})</td>
+              <td style="color:${netVal > 0 ? 'var(--green)' : (netVal < 0 ? 'var(--red)' : 'var(--text-muted)')}; font-weight:700;">$${r.net_pnl}</td>
+              <td>${r.sma_spread_pct} / RSI ${r.latest_rsi}</td>
+              <td>${r.drip_progress} (~${r.est_wins_to_spawn} wins)</td>
+              <td style="font-size:0.74rem; color:var(--text-muted); max-width:320px; white-space:normal;">${r.diagnosis}</td>
+            `;
+            diagBody.appendChild(tr);
+          });
+        }
 
         const ordBody = document.getElementById('ordersBody');
         ordBody.innerHTML = '';
