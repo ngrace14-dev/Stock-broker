@@ -214,23 +214,410 @@
       padding: 10px;
       font-family: monospace;
       font-size: 0.78rem;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .toast {
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      background: var(--bg-card);
+      border-left: 4px solid var(--accent);
+      display: none;
+      word-break: break-word;
+    }
+    .bucket-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 10px;
+    }
+    .bucket-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--green));
+      transition: width 0.25s ease;
+    .topbar {
+      position: sticky;
+      top: 8px;
+      z-index: 100;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    }
+    .pulse-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      display: inline-block;
+      background: var(--amber);
+      box-shadow: 0 0 8px var(--amber);
+      animation: pulseAnim 1.4s infinite ease-in-out;
+    }
+    .pulse-dot.green {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+    }
+    @keyframes pulseAnim {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.35); opacity: 0.55; }
+    }
+    .enterprise-layout {
+      display: grid;
+      grid-template-columns: 1fr 330px;
+      gap: 14px;
+      align-items: start;
+    }
+    @media (max-width: 1200px) {
+      .enterprise-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+    .quadrant-matrix {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    @media (max-width: 960px) {
+      .quadrant-matrix {
+        grid-template-columns: 1fr;
+      }
+    }
+    .quadrant-tag {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .drift-alert-banner {
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: rgba(245, 158, 11, 0.16);
+      border: 1px solid var(--amber);
+      color: var(--amber);
+      font-size: 0.8rem;
+      font-weight: 600;
+      display: none;
+    }
+    .node-isolated {
+      border-color: var(--red) !important;
+      background: rgba(239, 68, 68, 0.12) !important;
+    }
+    .slide-lock-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #1c1115;
+      border: 1px solid rgba(239,68,68,0.45);
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+    .stacked-bar {
+      display: flex;
+      width: 100%;
+      height: 16px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .stacked-seg {
+      height: 100%;
+      transition: width 0.3s ease;
+    }
+  </style>
+</head>
 <body>
   <div class="app-shell">
     <header class="topbar">
       <div class="brand">
         <h1>AUTO-BROKER TERMINAL // v3.7 DEFCON 0</h1>
+        <span id="globalRatingBadge" class="badge amber">RATING: 7.5 / 10 (STABLE - DEGRADED)</span>
+        <span id="heartbeatHudBadge" class="badge amber">
+          <span id="heartbeatDot" class="pulse-dot"></span>
+          <span id="heartbeatText">WATCHDOG: 0.0s</span>
+        </span>
+        <span id="primaryConnBadge" class="badge green">PRIMARY: ALPACA (24ms - ALIVE)</span>
+        <span id="secondaryConnBadge" class="badge amber">SECONDARY: PROXY STANDBY</span>
         <span id="modeBadge" class="badge amber">LOADING...</span>
         <span id="stateBadge" class="badge green">STATE: IDLE</span>
         <span id="signalBadge" class="badge green">SIGNAL: BUY</span>
       </div>
-      <div class="btn-row">
-        <button class="btn-accent" onclick="triggerStrategyTick()">Run VelocityBeta Strategy Tick</button>
-        <button onclick="triggerSettlementSync()">9:29:30 Settlement Sync</button>
-        <button onclick="refreshState()">Refresh Telemetry</button>
+      <div class="btn-row" style="align-items:center;">
+        <button id="fundGateToggleBtn" class="btn-sell" onclick="toggleFundGate()" title="The Only Gate: Lock or Unlock Real Wallet/Brokerage Funds">
+          WALLET GATE: CLOSED (LOCKED)
+        </button>
+        <button id="execModeToggleBtn" class="btn-warn" onclick="toggleExecutionMode()" title="Switch between Lie-Proof Ghost Portfolio Mode and Live Execution Mode">
+          MODE: GHOST PORTFOLIO
+        </button>
+        <button class="btn-accent" onclick="triggerAgentPulseNow()">Pulse Agent Brain Now</button>
+        <div class="slide-lock-wrap" title="Dual-Action Sliding Lock to Arm Master Flatten">
+          <span style="font-size:0.72rem; color:var(--red); font-weight:700;">ARM MASTER FLATTEN</span>
+          <input id="masterFlattenSlider" type="range" min="0" max="100" value="0" style="width:90px;" oninput="onFlattenSliderChange(this.value)" />
+          <button id="masterFlattenBtn" class="btn-sell" style="padding:5px 10px; opacity:0.4;" disabled onclick="executeMasterFlattenAll()">LOCKED</button>
+        </div>
+        <button onclick="refreshState()">Refresh</button>
       </div>
     </header>
 
     <div id="statusToast" class="toast"></div>
+
+    <!-- Autonomous Agent Heartbeat & Lie-Proof Ghost Portfolio Banner -->
+    <section class="panel" style="border-color: rgba(59,130,246,0.5);">
+      <div class="panel-header">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <span class="pulse-dot green"></span>
+          <span class="panel-title">AUTONOMOUS AGENT HEARTBEAT &amp; LIE-PROOF GHOST PORTFOLIO</span>
+          <span class="badge green" id="agentPulseBadge">PULSE #0</span>
+          <span class="badge amber" id="ghostProofBadge">SHA-256 MARKET-PRICE VERIFIED</span>
+        </div>
+        <div style="font-size:0.78rem; color:var(--text-muted);" id="agentLastDecisionText">
+          Observing active fleet &amp; live market quotes...
+        </div>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Ghost Portfolio Equity</div>
+          <div class="kpi-value" id="ghostEquityVal">$10,000.00</div>
+          <div class="kpi-sub" id="ghostCashSub">Starting: $10,000.00 | Cash: $10,000.00</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Ghost Realized P&amp;L (Closed)</div>
+          <div class="kpi-value" id="ghostRealizedVal">$0.00</div>
+          <div class="kpi-sub" id="ghostWinRateSub">Wins: 0 | Losses: 0 (0.0%)</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Ghost Unrealized P&amp;L (Open MTM)</div>
+          <div class="kpi-value" id="ghostUnrealizedVal">$0.00</div>
+          <div class="kpi-sub" id="ghostReturnPctSub">Net Return: 0.00%</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Wallet / Fund Gate Status</div>
+          <div class="kpi-value" id="fundGateCardVal" style="color:var(--red);">LOCKED (GHOST ONLY)</div>
+          <div class="kpi-sub">Toggle in header to allow real brokerage funds</div>
+        </div>
+      </div>
+
+      <div class="quadrant-matrix">
+        <div>
+          <div class="kpi-label" style="margin-bottom:6px;">Ghost Open Positions (Marked-to-Market off Live Quotes)</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Node</th>
+                  <th>Qty</th>
+                  <th>Entry Price</th>
+                  <th>Market Quote</th>
+                  <th>Unrealized P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody id="ghostPositionsBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <div class="kpi-label" style="margin-bottom:6px;">Immutable Ghost Trade Audit Ledger (SHA-256 Hash-Chained)</div>
+          <div class="table-wrap" style="max-height:175px; overflow-y:auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Side</th>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Market Quote</th>
+                  <th>Realized P&amp;L</th>
+                  <th>Price Source</th>
+                  <th>SHA-256 Proof</th>
+                </tr>
+              </thead>
+              <tbody id="ghostTradesBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="enterprise-layout">
+      <div class="quadrant-matrix">
+        <!-- Quadrant A: MasterRouter Firewall (Systemic Risk) -->
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="quadrant-tag">Quadrant A // Choke Point</div>
+              <span class="panel-title">MasterRouter Firewall (30% Systemic Exposure Cap)</span>
+            </div>
+            <span class="badge green" id="quadAFirewallBadge">[ 8/10 ] ACTIVE</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
+            <div>
+              <div class="kpi-label">Deployed Capital vs. 30% Hard Stop</div>
+              <div class="kpi-value" id="quadAExposureValue">0.0% / 30.0%</div>
+            </div>
+            <div style="text-align:right;">
+              <div class="kpi-label">30% Max Single-Order Cap</div>
+              <div style="font-size:1.1rem; font-weight:700; color:var(--accent);" id="quadACapDollar">$30,000.00</div>
+            </div>
+          </div>
+          <div>
+            <div style="display:flex; justify-content:space-between; font-size:0.74rem; color:var(--text-muted); margin-bottom:4px;">
+              <span>0% Safe</span>
+              <span style="color:var(--amber);">25% Warn</span>
+              <span style="color:var(--red);">28% Critical</span>
+              <span>30% Hard Cap</span>
+            </div>
+            <div class="progress-track" style="height:14px;">
+              <div id="quadAGaugeFill" class="progress-fill" style="width:20%;"></div>
+            </div>
+          </div>
+          <div>
+            <div class="kpi-label" style="margin-bottom:4px;">Stacked Node Allocation Across Active Fleet</div>
+            <div id="quadAStackedBar" class="stacked-bar"></div>
+            <div id="quadALegend" style="display:flex; flex-wrap:wrap; gap:10px; font-size:0.74rem; color:var(--text-muted); margin-top:6px;"></div>
+          </div>
+        </section>
+
+        <!-- Quadrant B: ACID Ledger Reconciliation (State Integrity) -->
+        <section class="panel" id="quadBPanel">
+          <div class="panel-header">
+            <div>
+              <div class="quadrant-tag">Quadrant B // State Integrity</div>
+              <span class="panel-title">ACID Ledger Reconciliation (Virtual Wealth vs. Broker)</span>
+            </div>
+            <span class="badge green" id="quadBRatingBadge">[ 9/10 ] SYNCED</span>
+          </div>
+          <div id="driftAlertBanner" class="drift-alert-banner">
+            DRIFT ALERT: Virtual Wealth delta exceeds $0.00! New node generation locked until ledger_validator.py resolves discrepancy.
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <th>Virtual Wealth (schema.sql)</th>
+                  <th>Broker Ledger (Alpaca)</th>
+                  <th>Drift / Delta</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="reconciliationTableBody"></tbody>
+            </table>
+          </div>
+          <div class="btn-row" style="justify-content:space-between; align-items:center;">
+            <span style="font-size:0.75rem; color:var(--text-muted);">Audit Invariant: Locked Wallets + Active + Basis == Broker Cash</span>
+            <div class="btn-row">
+              <button class="btn-warn" style="padding:5px 10px; font-size:0.75rem;" onclick="simulateLedgerDrift(145.50)">Simulate +$145.50 Drift</button>
+              <button class="btn-accent" style="padding:5px 10px; font-size:0.75rem;" onclick="simulateLedgerDrift(0)">Resolve Drift ($0.00)</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Quadrant C: Distributed Node Topology (Fleet Health) -->
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="quadrant-tag">Quadrant C // Fleet Health &amp; Blast Radius</div>
+              <span class="panel-title">Distributed Node Topology (Tier 0 Incubator vs Tier 1+ Graduated)</span>
+            </div>
+            <span class="badge amber" id="quadCRatingBadge">[ 7/10 ] FLEET TOPOLOGY</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <span class="badge green" id="internalVaultBadge">Internal Vault: $0.00</span>
+            <span style="font-size:0.75rem; color:var(--text-muted);">Click "Isolate Blast Radius" on any node card to test failure containment.</span>
+          </div>
+          <div id="dripBucketsGrid" class="bucket-grid"></div>
+        </section>
+
+        <!-- Quadrant D: Catastrophic Escape Valve (Dual-Phase Flatten) -->
+        <section class="panel" id="quadDPanel">
+          <div class="panel-header">
+            <div>
+              <div class="quadrant-tag">Quadrant D // Lifeboat Protocol</div>
+              <span class="panel-title">Catastrophic Escape Valve (Dual-Phase Async Flatten)</span>
+            </div>
+            <span class="badge green" id="quadDStateBadge">[ 9/10 ] STANDBY</span>
+          </div>
+          <div style="font-size:0.78rem; color:var(--text-muted);">
+            Phase 1: Cancel Pending OCO/Maker Legs &rarr; Phase 2: Aggressive Market Sweep Liquidation
+          </div>
+          <div class="progress-track" style="height:12px;">
+            <div id="flattenSweepProgress" class="progress-fill" style="width:0%; background:var(--red);"></div>
+          </div>
+          <div class="log-box" id="escapeValveLogBox" style="max-height:110px;"></div>
+          <div id="supervisorUnlockBox" style="display:none; background:rgba(239,68,68,0.14); border:1px solid var(--red); padding:10px; border-radius:8px;">
+            <div style="font-size:0.8rem; font-weight:700; color:var(--red); margin-bottom:6px;">
+              POST-FLATTEN LOCK ENGAGED: Enter Supervisor Key (DEFCON0) to Reboot Daemon
+            </div>
+            <div class="btn-row">
+              <input id="supervisorKeyInput" type="password" placeholder="Supervisor Key (DEFCON0)" style="flex:1;" />
+              <button class="btn-accent" onclick="unlockPostFlatten()">Unlock &amp; Resume</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- 3. Persistent Right-Hand Drawer: Infrastructure & "Weak Link" Diagnostics -->
+      <aside class="panel">
+        <div class="panel-header">
+          <div>
+            <div class="quadrant-tag">Diagnostics Sidebar</div>
+            <span class="panel-title">Infrastructure &amp; "Weak Link" Diagnostics</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="diagDbMode">1. Database Migration Status (schema.sql)</label>
+          <select id="diagDbMode" onchange="saveDiagnosticsConfig()">
+            <option value="SQLITE_ACID_WAL">SQLite WAL / schema.sql (ACID Active)</option>
+            <option value="JSON_FALLBACK">Warning - Using Local JSON Fallback</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>2. Broker Order Routing Flow-Chart</label>
+          <div style="background:var(--bg-primary); border:1px solid var(--border); border-radius:8px; padding:10px; font-size:0.76rem; display:flex; flex-direction:column; gap:6px;">
+            <div>[MasterRouter 30% Gate] &darr;</div>
+            <div style="color:var(--green);">Primary: Alpaca API v2 (Connected)</div>
+            <div id="diagFlowSecondary" style="color:var(--amber);">&hookrightarrow; Failover: Local ACID Ledger Proxy</div>
+          </div>
+          <label style="margin-top:4px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input id="diagProxyToggle" type="checkbox" checked onchange="saveDiagnosticsConfig()" style="width:auto;" />
+            Enable Secondary Failover Proxy
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="diagMissedBeats">3. Emergency Kill Trigger (Missed Watchdog Beats)</label>
+          <div class="btn-row">
+            <input id="diagMissedBeats" type="number" min="1" max="20" value="3" />
+            <button class="btn-accent" onclick="saveDiagnosticsConfig()">Set Trigger</button>
+          </div>
+          <span style="font-size:0.72rem; color:var(--text-muted);">Fires Dual-Phase Flatten automatically after N missed heartbeats.</span>
+        </div>
+        <div class="btn-row" style="margin-top:4px;">
+          <button class="btn-accent" style="flex:1;" onclick="triggerSelfHeal()">Self-Heal Fleet</button>
+          <button style="flex:1;" onclick="triggerGuardianCheck()">Guardian Audit</button>
+        </div>
+        <div style="font-size:0.76rem; color:var(--text-muted);" id="driverStatusText">
+          Execution Proxy: PRIMARY_ALPACA | Failovers: 0
+        </div>
+        <span class="badge green" id="guardianBadge">GUARDIAN: ARMED</span>
+      </aside>
+    </div>
 
     <section class="kpi-grid">
       <div class="kpi-card">
@@ -332,18 +719,6 @@
         </section>
       </div>
 
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .toast {
-      padding: 10px 12px;
-      border-radius: 6px;
-      font-size: 0.82rem;
-      background: var(--bg-card);
-      border-left: 4px solid var(--accent);
-      display: none;
-      word-break: break-word;
       <div style="display:flex; flex-direction:column; gap:14px; min-width:0;">
         <section class="panel">
           <div class="panel-header">
@@ -416,25 +791,33 @@
     </main>
   </div>
 
-    }
-  </style>
-</head>
   <script>
     function showToast(msg, isError = false) {
       const el = document.getElementById('statusToast');
+      if (!el) return;
       el.style.display = 'block';
       el.style.borderLeftColor = isError ? 'var(--red)' : 'var(--green)';
       el.textContent = msg;
     }
 
     function updateNotionalPreview() {
-      const q = parseFloat(document.getElementById('orderQty').value || '0');
-      const p = parseFloat(document.getElementById('orderPrice').value || '0');
-      document.getElementById('orderNotionalPreview').value = '$' + (q * p).toFixed(2);
+      const qtyEl = document.getElementById('orderQty');
+      const priceEl = document.getElementById('orderPrice');
+      const prevEl = document.getElementById('orderNotionalPreview');
+      if (!qtyEl || !priceEl || !prevEl) return;
+      const q = parseFloat(qtyEl.value || '0');
+      const p = parseFloat(priceEl.value || '0');
+      prevEl.value = '$' + (q * p).toFixed(2);
     }
 
-    document.getElementById('orderQty').addEventListener('input', updateNotionalPreview);
-    document.getElementById('orderPrice').addEventListener('input', updateNotionalPreview);
+    window.addEventListener('DOMContentLoaded', () => {
+      const qtyEl = document.getElementById('orderQty');
+      const priceEl = document.getElementById('orderPrice');
+      if (qtyEl) qtyEl.addEventListener('input', updateNotionalPreview);
+      if (priceEl) priceEl.addEventListener('input', updateNotionalPreview);
+      refreshState();
+      setInterval(refreshState, 5000);
+    });
 
     async function apiPost(url, payload) {
       const res = await fetch(url, {
@@ -453,14 +836,164 @@
         const acct = data.account || {};
         const sys = data.system || {};
         const led = data.ledger || {};
+        const ag = data.agent_settings || {};
+        const ghost = data.ghost_portfolio || {};
+        window._latestAgentSettings = ag;
+
+        const fgBtn = document.getElementById('fundGateToggleBtn');
+        const fgCardVal = document.getElementById('fundGateCardVal');
+        if (fgBtn) {
+          fgBtn.textContent = ag.fund_gate_enabled ? 'WALLET GATE: OPEN (LIVE FUNDS)' : 'WALLET GATE: CLOSED (LOCKED)';
+          fgBtn.className = ag.fund_gate_enabled ? 'btn-buy' : 'btn-sell';
+        }
+        if (fgCardVal) {
+          fgCardVal.textContent = ag.fund_gate_enabled ? 'OPEN (FUNDS UNLOCKED)' : 'LOCKED (GHOST ONLY)';
+          fgCardVal.style.color = ag.fund_gate_enabled ? 'var(--green)' : 'var(--red)';
+        }
+
+        const emBtn = document.getElementById('execModeToggleBtn');
+        if (emBtn) {
+          emBtn.textContent = 'MODE: ' + (ag.execution_mode === 'LIVE' ? 'LIVE BROKER' : 'GHOST PORTFOLIO');
+          emBtn.className = ag.execution_mode === 'LIVE' ? 'btn-accent' : 'btn-warn';
+        }
+
+        const pulseBadge = document.getElementById('agentPulseBadge');
+        if (pulseBadge) pulseBadge.textContent = `PULSE #${sys.agent_pulse_count || 0}`;
+        const decText = document.getElementById('agentLastDecisionText');
+        if (decText) decText.textContent = sys.agent_last_decision || 'Autonomous Agent observing market...';
+
+        const gEq = document.getElementById('ghostEquityVal');
+        if (gEq) gEq.textContent = '$' + (ghost.total_equity || '10000.00');
+        const gCashSub = document.getElementById('ghostCashSub');
+        if (gCashSub) gCashSub.textContent = `Starting: $${ghost.starting_cash || '10000.00'} | Cash: $${ghost.cash || '10000.00'}`;
+        const gReal = document.getElementById('ghostRealizedVal');
+        if (gReal) {
+          const rVal = parseFloat(ghost.realized_pnl || '0');
+          gReal.textContent = (rVal >= 0 ? '+$' : '-$') + Math.abs(rVal).toFixed(2);
+          gReal.style.color = rVal >= 0 ? 'var(--green)' : 'var(--red)';
+        }
+        const gWinSub = document.getElementById('ghostWinRateSub');
+        if (gWinSub) gWinSub.textContent = `Wins: ${ghost.wins || 0} | Losses: ${ghost.losses || 0} (${ghost.win_rate || '0.0%'})`;
+        const gUnrl = document.getElementById('ghostUnrealizedVal');
+        if (gUnrl) {
+          const uVal = parseFloat(ghost.unrealized_pnl || '0');
+          gUnrl.textContent = (uVal >= 0 ? '+$' : '-$') + Math.abs(uVal).toFixed(2);
+          gUnrl.style.color = uVal >= 0 ? 'var(--green)' : 'var(--red)';
+        }
+        const gRetSub = document.getElementById('ghostReturnPctSub');
+        if (gRetSub) gRetSub.textContent = `Net Return: ${ghost.return_pct || '0.00%'} (Net P&L: $${ghost.net_pnl || '0.00'})`;
+
+        const gPosBody = document.getElementById('ghostPositionsBody');
+        if (gPosBody) {
+          gPosBody.innerHTML = '';
+          (ghost.positions || []).forEach(gp => {
+            const u = parseFloat(gp.unrealized_pnl || '0');
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td><strong>${gp.symbol}</strong></td>
+              <td>#${gp.node_id}</td>
+              <td>${gp.qty}</td>
+              <td>$${gp.avg_entry_price}</td>
+              <td>$${gp.current_market_price}</td>
+              <td style="color:${u >= 0 ? 'var(--green)' : 'var(--red)'}; font-weight:700;">$${gp.unrealized_pnl} (${gp.unrealized_pnl_pct}%)</td>
+            `;
+            gPosBody.appendChild(tr);
+          });
+          if (!(ghost.positions || []).length) {
+            gPosBody.innerHTML = '<tr><td colspan="6" style="color:var(--text-muted)">No open ghost positions yet — click "Pulse Agent Brain Now" or wait for auto-pulse</td></tr>';
+          }
+        }
+
+        const gTrdBody = document.getElementById('ghostTradesBody');
+        if (gTrdBody) {
+          gTrdBody.innerHTML = '';
+          (ghost.trades || []).slice(0, 12).forEach(gt => {
+            const rp = parseFloat(gt.realized_pnl || '0');
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td style="color:${gt.side === 'buy' ? 'var(--green)' : 'var(--red)'}; font-weight:700;">${(gt.side || '').toUpperCase()}</td>
+              <td><strong>${gt.symbol}</strong></td>
+              <td>${gt.qty}</td>
+              <td>$${gt.market_price}</td>
+              <td style="color:${rp >= 0 ? 'var(--green)' : 'var(--red)'}">$${gt.realized_pnl}</td>
+              <td style="font-size:0.72rem; color:var(--text-muted);">${gt.price_source}</td>
+              <td><code>${gt.audit_hash}</code></td>
+            `;
+            gTrdBody.appendChild(tr);
+          });
+          if (!(ghost.trades || []).length) {
+            gTrdBody.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted)">No ghost trades recorded yet</td></tr>';
+          }
+        }
 
         const modeBadge = document.getElementById('modeBadge');
         modeBadge.textContent = 'MODE: ' + (acct.mode || 'SANDBOX');
         modeBadge.className = 'badge ' + (acct.connected ? 'green' : 'amber');
 
+        const ratingBadge = document.getElementById('globalRatingBadge');
+        if (ratingBadge) {
+          ratingBadge.textContent = 'RATING: ' + (sys.global_rating || '7.5 / 10 (STABLE - DEGRADED)');
+          ratingBadge.className = 'badge ' + ((sys.global_rating || '').includes('9.4') ? 'green' : 'amber');
+        }
+
+        const hbText = document.getElementById('heartbeatText');
+        const hbDot = document.getElementById('heartbeatDot');
+        if (hbText) hbText.textContent = `WATCHDOG: ${sys.heartbeat_age_seconds || 0.0}s (${sys.guardian_state || 'ARMED'})`;
+        if (hbDot) hbDot.className = 'pulse-dot ' + ((sys.heartbeat_age_seconds || 0) < 15 ? 'green' : '');
+
+        const primBadge = document.getElementById('primaryConnBadge');
+        if (primBadge) {
+          primBadge.textContent = `PRIMARY: ALPACA (${sys.primary_latency_ms || 12}ms - ${acct.connected ? 'ALIVE' : 'SANDBOX'})`;
+          primBadge.className = 'badge ' + (acct.connected ? 'green' : 'amber');
+        }
+        const secBadge = document.getElementById('secondaryConnBadge');
+        if (secBadge) {
+          secBadge.textContent = sys.secondary_proxy_enabled
+            ? 'SECONDARY: ACID PROXY ARMED'
+            : 'SECONDARY: PROXY DISABLED (SPOF)';
+          secBadge.className = 'badge ' + (sys.secondary_proxy_enabled ? 'amber' : 'red');
+        }
+
         document.getElementById('stateBadge').textContent = 'STATE: ' + (sys.execution_state || 'IDLE');
+        document.getElementById('stateBadge').className = 'badge ' + (sys.post_flatten_locked ? 'red' : 'green');
         document.getElementById('signalBadge').textContent = 'SIGNAL: ' + (sys.current_signal || 'BUY');
         document.getElementById('keyBadge').textContent = 'Alpaca Key: ' + (acct.key_preview || 'NOT_CONFIGURED');
+
+        // Quadrant A: MasterRouter Firewall Gauge & Stacked Allocation Bar
+        const expPct = parseFloat(sys.current_exposure_pct || 0);
+        const qAVal = document.getElementById('quadAExposureValue');
+        if (qAVal) qAVal.textContent = `${expPct.toFixed(1)}% / 30.0% ($${sys.deployed_capital || '0.00'})`;
+        const qACap = document.getElementById('quadACapDollar');
+        if (qACap) qACap.textContent = '$' + (sys.max_single_order_notional || '30000.00');
+        const qAGauge = document.getElementById('quadAGaugeFill');
+        if (qAGauge) {
+          const gaugeWidth = Math.min(100, (expPct / 30.0) * 100);
+          qAGauge.style.width = gaugeWidth.toFixed(1) + '%';
+          qAGauge.style.background = expPct >= 28 ? 'var(--red)' : (expPct >= 25 ? 'var(--amber)' : 'linear-gradient(90deg, var(--accent), var(--green))');
+        }
+        const qABadge = document.getElementById('quadAFirewallBadge');
+        if (qABadge) {
+          qABadge.textContent = expPct >= 28 ? '[ 8/10 ] CRITICAL NEAR CAP' : (expPct >= 25 ? '[ 8/10 ] WARN >25%' : '[ 8/10 ] ACTIVE');
+          qABadge.className = 'badge ' + (expPct >= 28 ? 'red' : (expPct >= 25 ? 'amber' : 'green'));
+        }
+        const colors = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ec4899', '#06b6d4'];
+        const qABar = document.getElementById('quadAStackedBar');
+        const qALeg = document.getElementById('quadALegend');
+        if (qABar && qALeg) {
+          qABar.innerHTML = '';
+          qALeg.innerHTML = '';
+          (sys.node_allocations || []).forEach((na, idx) => {
+            const c = colors[idx % colors.length];
+            const seg = document.createElement('div');
+            seg.className = 'stacked-seg';
+            seg.style.width = Math.min(100, (na.pct_of_equity / 30.0) * 100).toFixed(1) + '%';
+            seg.style.background = c;
+            qABar.appendChild(seg);
+            const item = document.createElement('span');
+            item.innerHTML = `<strong style="color:${c};">&bull; ${na.ticker}</strong>: $${na.capital} (${na.pct_of_equity}%)`;
+            qALeg.appendChild(item);
+          });
+        }
 
         document.getElementById('kpiEquity').textContent = '$' + (acct.equity || '0.00');
         document.getElementById('kpiAccountMode').textContent = `${acct.account_id || ''} (${acct.status || ''})`;
@@ -471,6 +1004,101 @@
         document.getElementById('kpiLedgerStatus').textContent = led.invariants_verified
           ? 'Invariants: Verified (0.00 delta)'
           : 'ALERT: Discrepancy Detected';
+
+        // Quadrant B: ACID Ledger Reconciliation Table
+        const reconBody = document.getElementById('reconciliationTableBody');
+        const driftBanner = document.getElementById('driftAlertBanner');
+        const qBBadge = document.getElementById('quadBRatingBadge');
+        if (driftBanner) driftBanner.style.display = led.invariants_verified ? 'none' : 'block';
+        if (qBBadge) {
+          qBBadge.textContent = led.invariants_verified ? '[ 9/10 ] SYNCED' : '[ 9/10 ] DRIFT ALERT';
+          qBBadge.className = 'badge ' + (led.invariants_verified ? 'green' : 'amber');
+        }
+        if (reconBody) {
+          reconBody.innerHTML = '';
+          (led.reconciliation_rows || []).forEach(r => {
+            const isSync = r.status === 'SYNCED';
+            const tr = document.createElement('tr');
+            if (!isSync) tr.style.background = 'rgba(245, 158, 11, 0.14)';
+            tr.innerHTML = `
+              <td><strong>${r.metric}</strong></td>
+              <td>${r.virtual_wealth}</td>
+              <td>${r.broker_ledger}</td>
+              <td style="color:${isSync ? 'var(--green)' : 'var(--amber)'}; font-weight:700;">${r.drift_delta}</td>
+              <td><span class="badge ${isSync ? 'green' : 'amber'}">${r.status}</span></td>
+            `;
+            reconBody.appendChild(tr);
+          });
+        }
+
+        // Quadrant D: Catastrophic Escape Valve & Post-Flatten Lock
+        const qDBadge = document.getElementById('quadDStateBadge');
+        const sweepBar = document.getElementById('flattenSweepProgress');
+        const escLog = document.getElementById('escapeValveLogBox');
+        const supBox = document.getElementById('supervisorUnlockBox');
+        if (qDBadge) {
+          qDBadge.textContent = sys.post_flatten_locked ? '[ 9/10 ] FLAT LOCKED' : '[ 9/10 ] STANDBY';
+          qDBadge.className = 'badge ' + (sys.post_flatten_locked ? 'red' : 'green');
+        }
+        if (sweepBar) sweepBar.style.width = sys.post_flatten_locked ? '100%' : '0%';
+        if (supBox) supBox.style.display = sys.post_flatten_locked ? 'block' : 'none';
+        if (escLog) {
+          escLog.innerHTML = '';
+          (sys.last_flatten_log || []).forEach(line => {
+            const d = document.createElement('div');
+            d.textContent = line;
+            escLog.appendChild(d);
+          });
+        }
+
+        const vaultBadge = document.getElementById('internalVaultBadge');
+        if (vaultBadge) {
+          vaultBadge.textContent = `Internal Vault: $${led.internal_total_vault || '0.00'} (Active: $${led.internal_active_capital || '0.00'} | Cold: $${led.internal_cold_storage || '0.00'})`;
+        }
+        const guardianBadge = document.getElementById('guardianBadge');
+        if (guardianBadge) {
+          guardianBadge.textContent = `GUARDIAN: ${sys.guardian_state || 'ARMED'}`;
+        }
+        const driverText = document.getElementById('driverStatusText');
+        if (driverText) {
+          driverText.textContent = `Execution Proxy: ${sys.active_driver || 'PRIMARY_ALPACA'} | Failovers: ${sys.failover_count || 0}`;
+        }
+
+        const dripGrid = document.getElementById('dripBucketsGrid');
+        if (dripGrid) {
+          dripGrid.innerHTML = '';
+          (data.nodes || []).forEach(n => {
+            const pct = Math.min(100, parseFloat(n.drip_pct || 0));
+            const isIsolated = n.status !== 'ACTIVE';
+            const tierLabel = parseInt(n.tier, 10) === 0 ? 'Tier 0 (Incubator)' : `Tier ${n.tier} (Graduated)`;
+            const card = document.createElement('div');
+            card.className = 'bucket-card' + (isIsolated ? ' node-isolated' : '');
+            card.innerHTML = `
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <strong>Node #${n.node_id} (${n.ticker})</strong>
+                <span class="badge ${isIsolated ? 'red' : 'green'}">${isIsolated ? 'ISOLATED (' + n.status + ')' : tierLabel}</span>
+              </div>
+              <div style="font-size:0.76rem; color:var(--text-muted);">
+                Active: <strong>$${n.active_capital}</strong> | Cold: <strong>$${n.cold_storage}</strong>
+              </div>
+              <div style="font-size:0.76rem;">
+                Drip Bucket: <strong>$${n.drip_bucket || '0.00'} / $${n.drip_target || '50.00'}</strong> (${pct}%)
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill" style="width:${pct}%"></div>
+              </div>
+              <div class="btn-row">
+                <button class="btn-accent" style="flex:1; padding:5px 8px; font-size:0.73rem;" ${led.node_generation_locked || isIsolated ? 'disabled style="opacity:0.4;flex:1;padding:5px 8px;font-size:0.73rem;"' : ''} onclick="fillDripBucket(${n.node_id}, 15.0)">
+                  + $15 Drip
+                </button>
+                <button class="${isIsolated ? 'btn-buy' : 'btn-sell'}" style="padding:5px 8px; font-size:0.73rem;" onclick="toggleNodeIsolation(${n.node_id})">
+                  ${isIsolated ? 'Restore' : 'Isolate Blast'}
+                </button>
+              </div>
+            `;
+            dripGrid.appendChild(card);
+          });
+        }
 
         const posBody = document.getElementById('positionsBody');
         posBody.innerHTML = '';
@@ -602,7 +1230,110 @@
       }
     }
 
-    refreshState();
+    async function fillDripBucket(nodeId, profitAmount) {
+      const res = await apiPost('/api/drip-fill', { node_id: nodeId, profit: profitAmount });
+      showToast(res.message || 'Drip profit allocated', !res.ok);
+      await refreshState();
+    }
+
+    async function triggerSelfHeal() {
+      const res = await apiPost('/api/self-heal', {});
+      showToast(res.message || 'Self-healing completed', !res.ok);
+      await refreshState();
+    }
+
+    async function triggerGuardianCheck() {
+      const res = await apiPost('/api/guardian-check', {});
+      showToast(res.message || 'Guardian audit completed', !res.ok);
+      await refreshState();
+    }
+
+    function onFlattenSliderChange(val) {
+      const btn = document.getElementById('masterFlattenBtn');
+      if (!btn) return;
+      if (parseInt(val, 10) >= 95) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.textContent = 'FIRE FLATTEN';
+      } else {
+        btn.disabled = true;
+        btn.style.opacity = '0.4';
+        btn.textContent = 'LOCKED';
+      }
+    }
+
+    async function executeMasterFlattenAll() {
+      const symbol = document.getElementById('orderSymbol').value || 'NVDA';
+      const res = await apiPost('/api/escape-valve', { symbol, price_breach: 9.9 });
+      const slider = document.getElementById('masterFlattenSlider');
+      if (slider) {
+        slider.value = 0;
+        onFlattenSliderChange(0);
+      }
+      showToast('MASTER DUAL-PHASE FLATTEN EXECUTED. Terminal locked in FLAT state.', true);
+      await refreshState();
+    }
+
+    async function unlockPostFlatten() {
+      const key = document.getElementById('supervisorKeyInput').value || '';
+      const res = await apiPost('/api/supervisor-unlock', { supervisor_key: key });
+      showToast(res.message || 'Supervisor response', !res.ok);
+      await refreshState();
+    }
+
+    async function simulateLedgerDrift(amount) {
+      const res = await apiPost('/api/simulate-drift', { drift_amount: amount });
+      showToast(res.message || 'Ledger drift updated', amount !== 0);
+      await refreshState();
+    }
+
+    async function toggleNodeIsolation(nodeId) {
+      const res = await apiPost('/api/isolate-node', { node_id: nodeId });
+      showToast(res.message || 'Node isolation toggled');
+      await refreshState();
+    }
+
+    async function saveDiagnosticsConfig() {
+      const dbMode = document.getElementById('diagDbMode').value;
+      const proxyEnabled = document.getElementById('diagProxyToggle').checked;
+      const beats = parseInt(document.getElementById('diagMissedBeats').value || '3', 10);
+      const flowSec = document.getElementById('diagFlowSecondary');
+      if (flowSec) {
+        flowSec.textContent = proxyEnabled
+          ? '↳ Failover: Local ACID Ledger Proxy (ARMED)'
+          : '↳ Failover: DEAD END (Single Point of Failure)';
+        flowSec.style.color = proxyEnabled ? 'var(--amber)' : 'var(--red)';
+      }
+      const res = await apiPost('/api/diagnostics-config', {
+        db_migration_mode: dbMode,
+        secondary_proxy_enabled: proxyEnabled,
+        missed_beats_threshold: beats
+      });
+      showToast(res.message || 'Diagnostics updated');
+      await refreshState();
+    }
+
+    async function toggleFundGate() {
+      const cur = window._latestAgentSettings || {};
+      const nextGate = !cur.fund_gate_enabled;
+      const res = await apiPost('/api/fund-gate', { fund_gate_enabled: nextGate });
+      showToast(res.message || 'Wallet Fund Gate toggled', !nextGate);
+      await refreshState();
+    }
+
+    async function toggleExecutionMode() {
+      const cur = window._latestAgentSettings || {};
+      const nextMode = cur.execution_mode === 'LIVE' ? 'GHOST' : 'LIVE';
+      const res = await apiPost('/api/fund-gate', { execution_mode: nextMode });
+      showToast(res.message || 'Execution mode switched');
+      await refreshState();
+    }
+
+    async function triggerAgentPulseNow() {
+      const res = await apiPost('/api/agent-pulse', {});
+      showToast(res.message || 'Autonomous Agent pulse completed', !res.ok);
+      await refreshState();
+    }
   </script>
 </body>
 </html>
