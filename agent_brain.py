@@ -157,6 +157,83 @@ class AutonomousAgentBrain:
             'message': self.last_decision_summary,
         }
 
+    def deploy_fleet_investments(self, requested_mode=None):
+        """
+        Start Investing Fleet (Both Ghost Mode & Live Normal Mode):
+        Iterates over all ACTIVE nodes and ensures each has an active position opened
+        at the current live market quote, or marks existing positions to market.
+        """
+        if requested_mode:
+            req_mode = str(requested_mode).strip().upper()
+            if req_mode in ('GHOST', 'LIVE'):
+                self.db.update_agent_settings(execution_mode=req_mode)
+
+        settings = self.db.get_agent_settings()
+        fund_gate_open = bool(settings['fund_gate_enabled'])
+        exec_mode = str(settings['execution_mode']).upper()
+
+        if exec_mode == 'LIVE' and not fund_gate_open:
+            return {
+                'ok': False,
+                'blocked_by_fund_gate': True,
+                'message': 'Cannot start Live Normal Mode investing while WALLET GATE is CLOSED (LOCKED). Toggle Wallet Gate OPEN in the top header first, or click "Start Investing (Ghost Mode)".',
+            }
+
+        nodes = [n for n in self.db.get_nodes() if n['status'] == 'ACTIVE']
+        if not nodes:
+            return {'ok': False, 'message': 'No ACTIVE nodes found. Run Self-Heal Fleet first.'}
+
+        ghost_summary = self.db.get_ghost_portfolio_summary()
+        open_ghost_map = {p['symbol']: p for p in ghost_summary['positions']}
+        open_live_map = {p['symbol']: p for p in self.execution.get_positions()}
+
+        deployed = []
+        for node in nodes:
+            node_id = int(node['node_id'])
+            ticker = node['assigned_ticker']
+            quote = self.execution.get_market_quote(ticker)
+            market_price = quote['price']
+
+            if exec_mode == 'GHOST':
+                if ticker in open_ghost_map:
+                    self.db.mark_ghost_position_to_market(ticker, market_price)
+                    deployed.append({'node_id': node_id, 'ticker': ticker, 'action': 'MARKED_TO_MARKET', 'price': f'{market_price:.2f}'})
+                    continue
+            else:
+                if ticker in open_live_map:
+                    deployed.append({'node_id': node_id, 'ticker': ticker, 'action': 'ALREADY_INVESTED_LIVE', 'price': f'{market_price:.2f}'})
+                    continue
+
+            alloc_factor = Decimal('0.20') if int(node['tier']) == 0 else Decimal('0.15')
+            node_cap = Decimal(str(node['active_capital']))
+            target_notional = min(Decimal('1200.00'), max(Decimal('150.00'), (node_cap * alloc_factor).quantize(Decimal('0.01'))))
+            qty = max(Decimal('1'), (target_notional / market_price).quantize(Decimal('1')))
+
+            res = self.execution.submit_order(
+                symbol=ticker,
+                side='buy',
+                qty=qty,
+                order_type='market',
+                limit_price=float(market_price),
+                estimated_price=float(market_price),
+                node_id=node_id,
+            )
+            self.pulse_count += 1
+            mode_tag = 'LIVE_BROKER' if (exec_mode == 'LIVE' and fund_gate_open) else 'GHOST_PORTFOLIO'
+            self._log_reasoning(node_id, ticker, f'START_INVESTING ({mode_tag})', f"Deployed {qty} shares @ ${market_price:.2f}")
+            deployed.append({
+                'node_id': node_id,
+                'ticker': ticker,
+                'qty': str(qty),
+                'price': f'{market_price:.2f}',
+                'ok': res.get('ok', False),
+                'action': f'INVESTED_{mode_tag}',
+            })
+
+        msg = f"Started Investing across {len(deployed)} Active Node(s) in {exec_mode} Mode!"
+        return {'ok': True, 'mode': exec_mode, 'deployed': deployed, 'message': msg}
+
+
     def start_background_loop(self):
         if self._thread and self._thread.is_alive():
             return

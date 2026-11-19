@@ -147,6 +147,9 @@ class BrokerService:
         if self.db_migration_mode == 'SQLITE_ACID_WAL' and self.secondary_proxy_enabled and not self.post_flatten_locked and ledger['invariants_verified']:
             rating_score = '9.4 / 10 (ENTERPRISE HARDENED)'
 
+        ghost_summary = self.db.get_ghost_portfolio_summary()
+        unified_investments = self._build_unified_investments(positions, ghost_summary, account)
+
         return {
             'system': {
                 'version': 'v3.7 DEFCON 0',
@@ -175,7 +178,8 @@ class BrokerService:
                 'agent_reasoning_stream': self.agent_brain.reasoning_stream[:20],
             },
             'agent_settings': self.db.get_agent_settings(),
-            'ghost_portfolio': self.db.get_ghost_portfolio_summary(),
+            'ghost_portfolio': ghost_summary,
+            'unified_investments': unified_investments,
             'account': account,
             'positions': positions,
             'orders': orders if orders else db_orders,
@@ -185,6 +189,86 @@ class BrokerService:
             'blackouts': self.db.get_blackouts(),
             'heartbeats': self.db.get_heartbeats(),
             'activity_log': self.execution.activity_log[:30],
+        }
+
+    def _build_unified_investments(self, live_positions, ghost_summary, account):
+        live_cost_basis = Decimal('0.00')
+        live_market_val = Decimal('0.00')
+        live_unrealized = Decimal('0.00')
+        items = []
+
+        for lp in live_positions:
+            qty = Decimal(str(lp.get('qty', '0')))
+            avg_p = Decimal(str(lp.get('avg_entry_price', '0')))
+            cur_p = Decimal(str(lp.get('current_price', avg_p)))
+            cost = (qty * avg_p).quantize(Decimal('0.01'))
+            mval = Decimal(str(lp.get('market_value', (qty * cur_p).quantize(Decimal('0.01')))))
+            unrl = Decimal(str(lp.get('unrealized_pl', (mval - cost).quantize(Decimal('0.01')))))
+            pct = ((unrl / cost) * Decimal('100.0')).quantize(Decimal('0.01')) if cost > 0 else Decimal('0.00')
+            live_cost_basis += cost
+            live_market_val += mval
+            live_unrealized += unrl
+            items.append({
+                'mode': 'LIVE',
+                'symbol': lp.get('symbol'),
+                'node_id': '-',
+                'qty': f'{qty:.2f}',
+                'entry_price': f'{avg_p:.2f}',
+                'current_price': f'{cur_p:.2f}',
+                'cost_basis': f'{cost:.2f}',
+                'market_value': f'{mval:.2f}',
+                'gain_loss': f'{unrl:.2f}',
+                'gain_loss_pct': f'{pct:.2f}%',
+            })
+
+        ghost_cost_basis = Decimal('0.00')
+        for gp in ghost_summary.get('positions', []):
+            qty = Decimal(str(gp.get('qty', '0')))
+            avg_p = Decimal(str(gp.get('avg_entry_price', '0')))
+            cur_p = Decimal(str(gp.get('current_market_price', avg_p)))
+            cost = (qty * avg_p).quantize(Decimal('0.01'))
+            mval = Decimal(str(gp.get('market_value', (qty * cur_p).quantize(Decimal('0.01')))))
+            unrl = Decimal(str(gp.get('unrealized_pnl', (mval - cost).quantize(Decimal('0.01')))))
+            pct = gp.get('unrealized_pnl_pct', '0.00')
+            ghost_cost_basis += cost
+            items.append({
+                'mode': 'GHOST',
+                'symbol': gp.get('symbol'),
+                'node_id': gp.get('node_id', 1),
+                'qty': f'{qty:.2f}',
+                'entry_price': f'{avg_p:.2f}',
+                'current_price': f'{cur_p:.2f}',
+                'cost_basis': f'{cost:.2f}',
+                'market_value': f'{mval:.2f}',
+                'gain_loss': f'{unrl:.2f}',
+                'gain_loss_pct': f'{pct}%',
+            })
+
+        live_pct = ((live_unrealized / live_cost_basis) * Decimal('100.0')).quantize(Decimal('0.01')) if live_cost_basis > 0 else Decimal('0.00')
+        return {
+            'live': {
+                'active_count': len(live_positions),
+                'invested_cost_basis': f'{live_cost_basis:.2f}',
+                'current_market_value': f'{live_market_val:.2f}',
+                'unrealized_gain_loss': f'{live_unrealized:.2f}',
+                'unrealized_gain_loss_pct': f'{live_pct:.2f}%',
+                'available_cash': str(account.get('cash', '0.00')),
+                'total_equity': str(account.get('equity', '0.00')),
+            },
+            'ghost': {
+                'active_count': len(ghost_summary.get('positions', [])),
+                'invested_cost_basis': f'{ghost_cost_basis:.2f}',
+                'current_market_value': ghost_summary.get('positions_value', '0.00'),
+                'unrealized_gain_loss': ghost_summary.get('unrealized_pnl', '0.00'),
+                'realized_gain_loss': ghost_summary.get('realized_pnl', '0.00'),
+                'net_gain_loss': ghost_summary.get('net_pnl', '0.00'),
+                'return_pct': ghost_summary.get('return_pct', '0.00%'),
+                'win_rate': ghost_summary.get('win_rate', '0.0%'),
+                'wins': ghost_summary.get('wins', 0),
+                'losses': ghost_summary.get('losses', 0),
+                'total_equity': ghost_summary.get('total_equity', '10000.00'),
+            },
+            'items': items,
         }
 
     def run_strategy_cycle(self, symbol='NVDA', qty=2, estimated_price=142.10, node_id=1):
@@ -346,6 +430,10 @@ def handle_api_post(path, payload):
         target_node = payload.get('node_id')
         override_price = payload.get('override_market_price')
         res = broker_service.agent_brain.run_single_pulse(target_node_id=target_node, override_market_price=override_price)
+        return res
+    if path == '/api/start-investing':
+        req_mode = payload.get('mode')
+        res = broker_service.agent_brain.deploy_fleet_investments(requested_mode=req_mode)
         return res
     return None
 

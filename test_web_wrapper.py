@@ -134,6 +134,17 @@ class TestWebWrapperIntegration(unittest.TestCase):
             ghost_state = broker_service.db.get_ghost_portfolio_summary()
             self.assertGreater(len(ghost_state['trades']), 0)
             self.assertTrue(ghost_state['trades'][0]['audit_hash'])
+
+            # Verify Start Investing Fleet in Ghost Mode & blocked Live Mode when Wallet Gate is Closed
+            live_blocked = handle_api_post('/api/start-investing', {'mode': 'LIVE'})
+            self.assertFalse(live_blocked['ok'])
+            self.assertTrue(live_blocked.get('blocked_by_fund_gate'))
+
+            ghost_deploy = handle_api_post('/api/start-investing', {'mode': 'GHOST'})
+            self.assertTrue(ghost_deploy['ok'])
+            st_after = broker_service.get_dashboard_state()
+            self.assertIn('unified_investments', st_after)
+            self.assertGreater(len(st_after['unified_investments']['items']), 0)
         finally:
             httpd.shutdown()
             httpd.server_close()

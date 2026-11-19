@@ -417,15 +417,77 @@
 
     <!-- Clickable Section Navigation Bar -->
     <nav class="tab-nav" aria-label="Dashboard Sections">
-      <button id="tabBtn-pulse" class="tab-btn active" onclick="switchTab('pulse')">1. Autonomous Pulse &amp; Ghost Portfolio</button>
-      <button id="tabBtn-nodes" class="tab-btn" onclick="switchTab('nodes')">2. Node Fleet &amp; Drip Buckets</button>
-      <button id="tabBtn-matrix" class="tab-btn" onclick="switchTab('matrix')">3. Firewall, ACID Ledger &amp; Escape Valve</button>
-      <button id="tabBtn-trading" class="tab-btn" onclick="switchTab('trading')">4. Manual Execution &amp; Live Wallet</button>
-      <button id="tabBtn-diagnostics" class="tab-btn" onclick="switchTab('diagnostics')">5. Diagnostics &amp; Weak Links</button>
+      <button id="tabBtn-investments" class="tab-btn active" onclick="switchTab('investments')">1. Active Investments (Gains &amp; Losses)</button>
+      <button id="tabBtn-pulse" class="tab-btn" onclick="switchTab('pulse')">2. Autonomous Pulse &amp; Ghost Audit</button>
+      <button id="tabBtn-nodes" class="tab-btn" onclick="switchTab('nodes')">3. Node Fleet &amp; Drip Buckets</button>
+      <button id="tabBtn-matrix" class="tab-btn" onclick="switchTab('matrix')">4. Firewall, ACID Ledger &amp; Escape Valve</button>
+      <button id="tabBtn-trading" class="tab-btn" onclick="switchTab('trading')">5. Manual Execution &amp; Live Wallet</button>
+      <button id="tabBtn-diagnostics" class="tab-btn" onclick="switchTab('diagnostics')">6. Diagnostics &amp; Weak Links</button>
     </nav>
 
-    <!-- SECTION 1: Autonomous Agent Heartbeat & Lie-Proof Ghost Portfolio -->
-    <div id="tabSection-pulse" class="tab-section active">
+    <!-- SECTION 1: Active Investments, Gains & Losses Quick-Check -->
+    <div id="tabSection-investments" class="tab-section active">
+      <section class="panel" style="border-color: rgba(16, 185, 129, 0.5);">
+        <div class="panel-header">
+          <div>
+            <div class="quadrant-tag">Quick Check-In // Ghost Mode &amp; Normal Live Mode</div>
+            <span class="panel-title">Active Investments, Real-Time Gains &amp; Losses Tracker</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn-warn" onclick="startInvestingFleet('GHOST')">Start Investing Fleet (Ghost Mode)</button>
+            <button class="btn-buy" onclick="startInvestingFleet('LIVE')">Start Investing Fleet (Live Normal Mode)</button>
+            <button class="btn-accent" onclick="triggerAgentPulseNow()">Cycle / Mark-to-Market Now</button>
+          </div>
+        </div>
+        <div class="quadrant-matrix">
+          <div class="kpi-card" style="border-color: rgba(245, 158, 11, 0.45);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span class="kpi-label" style="color:var(--amber); font-weight:700;">GHOST MODE PORTFOLIO (MARKET QUOTES)</span>
+              <span class="badge amber" id="invGhostCountBadge">0 Active</span>
+            </div>
+            <div class="kpi-grid" style="grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));">
+              <div><div class="kpi-label">Invested Basis</div><div class="kpi-value" style="font-size:1.15rem;" id="invGhostBasis">$0.00</div></div>
+              <div><div class="kpi-label">Market Value</div><div class="kpi-value" style="font-size:1.15rem;" id="invGhostMktVal">$0.00</div></div>
+              <div><div class="kpi-label">Open Gain/Loss</div><div class="kpi-value" style="font-size:1.15rem;" id="invGhostUnrl">$0.00</div></div>
+              <div><div class="kpi-label">Realized P&amp;L</div><div class="kpi-value" style="font-size:1.15rem;" id="invGhostReal">$0.00</div></div>
+            </div>
+            <div class="kpi-sub" id="invGhostSummarySub" style="margin-top:8px;">Total Ghost Equity: $10,000.00 | Net Return: 0.00%</div>
+          </div>
+          <div class="kpi-card" style="border-color: rgba(16, 185, 129, 0.45);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span class="kpi-label" style="color:var(--green); font-weight:700;">NORMAL / LIVE BROKER MODE (ALPACA)</span>
+              <span class="badge green" id="invLiveCountBadge">0 Active</span>
+            </div>
+            <div class="kpi-grid" style="grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));">
+              <div><div class="kpi-label">Invested Basis</div><div class="kpi-value" style="font-size:1.15rem;" id="invLiveBasis">$0.00</div></div>
+              <div><div class="kpi-label">Market Value</div><div class="kpi-value" style="font-size:1.15rem;" id="invLiveMktVal">$0.00</div></div>
+              <div><div class="kpi-label">Open Gain/Loss</div><div class="kpi-value" style="font-size:1.15rem;" id="invLiveUnrl">$0.00</div></div>
+              <div><div class="kpi-label">Available Cash</div><div class="kpi-value" style="font-size:1.15rem;" id="invLiveCash">$0.00</div></div>
+            </div>
+            <div class="kpi-sub" id="invLiveSummarySub" style="margin-top:8px;">Total Broker Equity: $100,000.00 | Open Return: 0.00%</div>
+          </div>
+        </div>
+        <div>
+          <div class="panel-header" style="margin-top:6px;">
+            <span class="panel-title">All Active Investments — Live Gain / Loss Breakdown (Ghost &amp; Normal Modes)</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Mode</th><th>Ticker</th><th>Node</th><th>Shares</th><th>Entry Price</th>
+                  <th>Market Price</th><th>Cost Basis</th><th>Current Value</th><th>Gain / Loss ($)</th><th>Gain / Loss (%)</th><th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="unifiedInvestmentsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- SECTION 2: Autonomous Agent Heartbeat & Lie-Proof Ghost Portfolio -->
+    <div id="tabSection-pulse" class="tab-section">
       <section class="panel" style="border-color: rgba(59,130,246,0.5);">
       <div class="panel-header">
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
@@ -904,7 +966,88 @@
         const led = data.ledger || {};
         const ag = data.agent_settings || {};
         const ghost = data.ghost_portfolio || {};
+        const uinv = data.unified_investments || {};
+        const ug = uinv.ghost || {};
+        const ul = uinv.live || {};
         window._latestAgentSettings = ag;
+
+        const fmtSigned = (val) => {
+          const n = parseFloat(val || '0');
+          return { text: (n >= 0 ? '+$' : '-$') + Math.abs(n).toFixed(2), color: n >= 0 ? 'var(--green)' : 'var(--red)' };
+        };
+
+        const gCnt = document.getElementById('invGhostCountBadge');
+        if (gCnt) gCnt.textContent = `${ug.active_count || 0} Active`;
+        const gBas = document.getElementById('invGhostBasis');
+        if (gBas) gBas.textContent = '$' + (ug.invested_cost_basis || '0.00');
+        const gMkt = document.getElementById('invGhostMktVal');
+        if (gMkt) gMkt.textContent = '$' + (ug.current_market_value || '0.00');
+        const gUnrEl = document.getElementById('invGhostUnrl');
+        if (gUnrEl) {
+          const s = fmtSigned(ug.unrealized_gain_loss);
+          gUnrEl.textContent = s.text;
+          gUnrEl.style.color = s.color;
+        }
+        const gRelEl = document.getElementById('invGhostReal');
+        if (gRelEl) {
+          const s = fmtSigned(ug.realized_gain_loss);
+          gRelEl.textContent = s.text;
+          gRelEl.style.color = s.color;
+        }
+        const gSumSub = document.getElementById('invGhostSummarySub');
+        if (gSumSub) {
+          gSumSub.textContent = `Total Ghost Equity: $${ug.total_equity || '10000.00'} | Net Return: ${ug.return_pct || '0.00%'} | Win Rate: ${ug.win_rate || '0.0%'} (${ug.wins || 0}W / ${ug.losses || 0}L)`;
+        }
+
+        const lCnt = document.getElementById('invLiveCountBadge');
+        if (lCnt) lCnt.textContent = `${ul.active_count || 0} Active`;
+        const lBas = document.getElementById('invLiveBasis');
+        if (lBas) lBas.textContent = '$' + (ul.invested_cost_basis || '0.00');
+        const lMkt = document.getElementById('invLiveMktVal');
+        if (lMkt) lMkt.textContent = '$' + (ul.current_market_value || '0.00');
+        const lUnrEl = document.getElementById('invLiveUnrl');
+        if (lUnrEl) {
+          const s = fmtSigned(ul.unrealized_gain_loss);
+          lUnrEl.textContent = s.text;
+          lUnrEl.style.color = s.color;
+        }
+        const lCashEl = document.getElementById('invLiveCash');
+        if (lCashEl) lCashEl.textContent = '$' + (ul.available_cash || '0.00');
+        const lSumSub = document.getElementById('invLiveSummarySub');
+        if (lSumSub) {
+          lSumSub.textContent = `Total Broker Equity: $${ul.total_equity || '100000.00'} | Open Return: ${ul.unrealized_gain_loss_pct || '0.00%'}`;
+        }
+
+        const uBody = document.getElementById('unifiedInvestmentsBody');
+        if (uBody) {
+          uBody.innerHTML = '';
+          (uinv.items || []).forEach(it => {
+            const gl = parseFloat(it.gain_loss || '0');
+            const isGhost = it.mode === 'GHOST';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td><span class="badge ${isGhost ? 'amber' : 'green'}">${it.mode}</span></td>
+              <td><strong>${it.symbol}</strong></td>
+              <td>${it.node_id !== '-' ? '#' + it.node_id : 'BROKER'}</td>
+              <td>${it.qty}</td>
+              <td>$${it.entry_price}</td>
+              <td>$${it.current_price}</td>
+              <td>$${it.cost_basis}</td>
+              <td>$${it.market_value}</td>
+              <td style="color:${gl >= 0 ? 'var(--green)' : 'var(--red)'}; font-weight:700;">${gl >= 0 ? '+$' : '-$'}${Math.abs(gl).toFixed(2)}</td>
+              <td style="color:${gl >= 0 ? 'var(--green)' : 'var(--red)'}; font-weight:700;">${it.gain_loss_pct}</td>
+              <td>
+                <button class="btn-sell" style="padding:4px 8px; font-size:0.73rem;" onclick="closeActiveInvestment('${it.mode}', '${it.symbol}', '${it.qty}', ${it.node_id !== '-' ? it.node_id : 1}, ${it.current_price})">
+                  Sell / Realize P&amp;L
+                </button>
+              </td>
+            `;
+            uBody.appendChild(tr);
+          });
+          if (!(uinv.items || []).length) {
+            uBody.innerHTML = '<tr><td colspan="11" style="color:var(--text-muted)">No active investments yet — click "Start Investing Fleet (Ghost Mode)" or "Start Investing Fleet (Live Normal Mode)" above to deploy!</td></tr>';
+          }
+        }
 
         const fgBtn = document.getElementById('fundGateToggleBtn');
         const fgCardVal = document.getElementById('fundGateCardVal');
@@ -1398,6 +1541,23 @@
     async function triggerAgentPulseNow() {
       const res = await apiPost('/api/agent-pulse', {});
       showToast(res.message || 'Autonomous Agent pulse completed', !res.ok);
+      await refreshState();
+    }
+
+    async function startInvestingFleet(mode) {
+      const res = await apiPost('/api/start-investing', { mode: mode });
+      showToast(res.message || `Started investing fleet in ${mode} mode`, !res.ok);
+      await refreshState();
+    }
+
+    async function closeActiveInvestment(mode, symbol, qty, nodeId, currentPrice) {
+      if (mode === 'GHOST') {
+        const res = await apiPost('/api/agent-pulse', { node_id: nodeId, override_market_price: currentPrice });
+        showToast(res.message || `Closed Ghost investment ${symbol}`, !res.ok);
+      } else {
+        const res = await apiPost('/api/flatten', { symbol: symbol, reason: 'QUICK_CHECK_REALIZE_PNL' });
+        showToast(`Liquidated Live position ${symbol}`, !res.ok);
+      }
       await refreshState();
     }
   </script>
