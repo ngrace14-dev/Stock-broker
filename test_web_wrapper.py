@@ -85,6 +85,10 @@ class TestWebWrapperIntegration(unittest.TestCase):
                 self.assertIn('AUTO-BROKER TERMINAL // v3.7 DEFCON 0', html)
                 self.assertIn('dripBucketsGrid', html)
                 self.assertIn('DOMContentLoaded', html)
+                self.assertIn('id="sectionSelector"', html)
+                for tab_key in ('investments', 'pulse', 'nodes', 'matrix', 'trading', 'diagnostics'):
+                    self.assertIn(f'id="tabBtn-{tab_key}"', html)
+                    self.assertIn(f'id="tabSection-{tab_key}"', html)
 
             with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/state', timeout=5) as resp:
                 payload = json.loads(resp.read().decode('utf-8'))
