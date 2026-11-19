@@ -674,3 +674,54 @@ class BrokerDatabase:
             'audit_hash': audit_hash,
             'message': f'[GHOST PORTFOLIO] {side.upper()} {qty_dec} {symbol} @ ${price_dec:.2f} ({price_source}) | Realized P&L: ${realized_pnl:.2f} | SHA256: {audit_hash}',
         }
+
+    def reset_ghost_portfolio(self, starting_cash='25.00', reset_nodes=True):
+        """
+        Hard-reset the Ghost Portfolio to a user-chosen starting capital (e.g., $25.00 checkpoint seed).
+        Wipes all prior ghost positions, ghost trades, and test artifacts so overnight results are 100% pure.
+        """
+        cash = Decimal(str(starting_cash)).quantize(Decimal('0.01'))
+        if cash <= Decimal('0.00'):
+            raise ValueError('Starting cash must be greater than $0.00.')
+        now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
+        with self._lock, self._connect() as conn:
+            conn.execute('DELETE FROM ghost_positions')
+            conn.execute('DELETE FROM ghost_trades')
+            conn.execute('DELETE FROM orders')
+            conn.execute(
+                """
+                UPDATE agent_settings
+                SET ghost_starting_cash = ?, ghost_cash = ?, ghost_realized_pnl = '0.00',
+                    ghost_wins = 0, ghost_losses = 0, last_pulse_utc = ?
+                WHERE id = 1
+                """,
+                (f'{cash:.2f}', f'{cash:.2f}', now_utc),
+            )
+            if reset_nodes:
+                conn.execute('DELETE FROM nodes')
+                per_node_cap = max(Decimal('6.25'), floor_cent(cash / Decimal('4')))
+                seed_nodes = [
+                    ('VELOCITY_BETA', 'HIGH_VELOCITY', 'NVDA', 'AMD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                    ('HARDWARE_TECH', 'SWING', 'SPY', 'QQQ', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                    ('PRECIOUS_METALS', 'MACRO_CYCLICAL', 'GLD', 'SLV', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                    ('DIVIDEND_INSURER', 'PERMANENT_ANCHOR', 'SCHD', 'VYM', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                ]
+                for div, cad, tick, btick, st, tier, start_cap, act_cap, cold, drip, target in seed_nodes:
+                    conn.execute(
+                        """
+                        INSERT INTO nodes (
+                            division, cadence_class, assigned_ticker, backup_ticker, status, tier,
+                            tier_starting_active_capital, active_capital, cold_storage, drip_bucket,
+                            drip_target, daily_starting_capital, daily_settled_budget, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (div, cad, tick, btick, st, tier, start_cap, act_cap, cold, drip, target, act_cap, act_cap, now_utc),
+                    )
+            conn.commit()
+        return {
+            'ok': True,
+            'starting_cash': f'{cash:.2f}',
+            'message': f'Ghost Portfolio cleanly reset to ${cash:.2f} starting capital (0 trades, 0 open positions, pure market-price tracking).',
+        }
+

@@ -1,18 +1,33 @@
 import json
+import tempfile
 import threading
 import unittest
 import urllib.request
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from backtest_beta import test_backtest_math
+from database import BrokerDatabase
 from ledger_validator import test_v37_invariants
 from server import BrokerHTTPRequestHandler, broker_service, handle_api_post
 
 
 class TestWebWrapperIntegration(unittest.TestCase):
     def setUp(self):
+        # Use an isolated temporary SQLite database for tests so unit tests never pollute production broker_v37.db
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self._test_db_path = Path(self._tmp_dir.name) / 'test_broker_v37.db'
+        test_db = BrokerDatabase(db_path=self._test_db_path)
+        broker_service.db = test_db
+        broker_service.router.db = test_db
+        broker_service.execution.db = test_db
+        broker_service.guardian.db = test_db
+        broker_service.agent_brain.db = test_db
         # Force deterministic sandbox mode during unit tests so we never fire unplanned live/paper orders
         broker_service.execution.refresh_config = lambda: broker_service.execution.config
         broker_service.execution.config['has_alpaca_keys'] = False
+
+    def tearDown(self):
+        self._tmp_dir.cleanup()
 
     def test_existing_invariants(self):
         test_v37_invariants()
@@ -145,6 +160,18 @@ class TestWebWrapperIntegration(unittest.TestCase):
             st_after = broker_service.get_dashboard_state()
             self.assertIn('unified_investments', st_after)
             self.assertGreater(len(st_after['unified_investments']['items']), 0)
+
+            # Verify Custom Starting Capital ($25.00 Checkpoint Seed) Hard Reset
+            reset_res = handle_api_post('/api/ghost-reset', {
+                'starting_cash': '25.00',
+                'reset_nodes': True,
+                'auto_deploy': True,
+            })
+            self.assertTrue(reset_res['ok'])
+            self.assertEqual(reset_res['starting_cash'], '25.00')
+            st_reset = broker_service.get_dashboard_state()
+            self.assertEqual(st_reset['ghost_portfolio']['starting_cash'], '25.00')
+            self.assertEqual(st_reset['ghost_portfolio']['realized_pnl'], '0.00')
         finally:
             httpd.shutdown()
             httpd.server_close()

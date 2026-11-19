@@ -433,7 +433,12 @@
             <div class="quadrant-tag">Quick Check-In // Ghost Mode &amp; Normal Live Mode</div>
             <span class="panel-title">Active Investments, Real-Time Gains &amp; Losses Tracker</span>
           </div>
-          <div class="btn-row">
+          <div class="btn-row" style="align-items:center;">
+            <div style="display:flex; align-items:center; gap:6px; background:var(--bg-card); border:1px solid var(--border); padding:4px 8px; border-radius:6px;">
+              <label for="ghostStartingCashInput" style="font-size:0.75rem; color:var(--amber); font-weight:700; white-space:nowrap;">Ghost Starting $:</label>
+              <input id="ghostStartingCashInput" type="number" step="0.01" min="1" value="25.00" style="width:95px; padding:5px 8px;" />
+              <button class="btn-warn" style="padding:5px 10px; font-size:0.76rem;" onclick="resetAndStartGhostRun()">Set $ &amp; Fresh Ghost Start</button>
+            </div>
             <button class="btn-warn" onclick="startInvestingFleet('GHOST')">Start Investing Fleet (Ghost Mode)</button>
             <button class="btn-buy" onclick="startInvestingFleet('LIVE')">Start Investing Fleet (Live Normal Mode)</button>
             <button class="btn-accent" onclick="triggerAgentPulseNow()">Cycle / Mark-to-Market Now</button>
@@ -1558,6 +1563,21 @@
         const res = await apiPost('/api/flatten', { symbol: symbol, reason: 'QUICK_CHECK_REALIZE_PNL' });
         showToast(`Liquidated Live position ${symbol}`, !res.ok);
       }
+      await refreshState();
+    }
+
+    async function resetAndStartGhostRun() {
+      const val = parseFloat(document.getElementById('ghostStartingCashInput').value || '25.00');
+      if (isNaN(val) || val <= 0) {
+        showToast('Please enter a valid starting dollar amount (> $0.00).', true);
+        return;
+      }
+      const res = await apiPost('/api/ghost-reset', {
+        starting_cash: val.toFixed(2),
+        reset_nodes: true,
+        auto_deploy: true
+      });
+      showToast(res.message || `Ghost Portfolio reset to $${val.toFixed(2)}`, !res.ok);
       await refreshState();
     }
   </script>

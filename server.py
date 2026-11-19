@@ -342,13 +342,25 @@ def handle_api_post(path, payload):
             '[POST-FLATTEN STATE] Terminal locked in FLAT state. Supervisor Key required to reboot daemon.',
         ]
         return asyncio.run(broker_service.execution.catastrophic_escape_valve(symbol, breach))
+        if path == '/api/panic':
+        key = str(payload.get('panic_keyword', '')).strip()
+        if key == 'PANIC':
+            broker_service.post_flatten_locked = True
+            broker_service.execution.state = 'PANIC_FLATTENING'
+            broker_service.last_flatten_log = ['[PANIC MODE] SYSTEM LOCKDOWN INITIATED. ALL POSITIONS LIQUIDATING.']
+            asyncio.run(broker_service.execution.execute_exit('ALL', 'EMERGENCY_PANIC'))
+            broker_service.db.update_agent_settings(fund_gate_enabled=False, execution_mode='GHOST')
+            return {'ok': True, 'message': 'EMERGENCY PANIC EXECUTED. Wallet Locked. System in Lockdown.'}
+        return {'ok': False, 'message': 'Invalid Panic Keyword.'}
     if path == '/api/supervisor-unlock':
         key = str(payload.get('supervisor_key', '')).strip()
-        if key.upper() in ('DEFCON0', 'ADMIN', 'UNLOCK', 'V37'):
+        if key == '14141414':
             broker_service.post_flatten_locked = False
-            broker_service.last_flatten_log.append('[SUPERVISOR AUTH] Valid Supervisor Key accepted. Daemon unlocked and returned to IDLE.')
-            broker_service.execution._record_event('SUPERVISOR', 'Post-Flatten Lock cleared via Supervisor Key.', 'INFO')
-            return {'ok': True, 'message': 'Supervisor Key verified. Post-Flatten lock cleared & trading resumed.'}
+            broker_service.execution.state = 'IDLE'
+            broker_service.last_flatten_log.append('[SYSTEM REINITIALIZED] 14141414 Accepted. System ready for duty.')
+            broker_service.execution._record_event('SUPERVISOR', 'System reinitialized via 14141414.', 'INFO')
+            return {'ok': True, 'message': 'System Reinitialized. Trading capabilities restored.'}
+        return {'ok': False, 'message': 'Invalid Reinitialization Key.'}
         return {'ok': False, 'message': 'Invalid Supervisor Key (Hint: use DEFCON0).'}
     if path == '/api/simulate-drift':
         amount = Decimal(str(payload.get('drift_amount', '0.00')))
@@ -434,6 +446,19 @@ def handle_api_post(path, payload):
     if path == '/api/start-investing':
         req_mode = payload.get('mode')
         res = broker_service.agent_brain.deploy_fleet_investments(requested_mode=req_mode)
+        return res
+    if path == '/api/ghost-reset':
+        starting_cash = payload.get('starting_cash', '25.00')
+        reset_nodes = bool(payload.get('reset_nodes', True))
+        res = broker_service.db.reset_ghost_portfolio(starting_cash=starting_cash, reset_nodes=reset_nodes)
+        broker_service.agent_brain.pulse_count = 0
+        broker_service.agent_brain.reasoning_stream.clear()
+        broker_service.agent_brain.last_decision_summary = f"Ghost Portfolio reset to ${res['starting_cash']} starting capital."
+        broker_service.execution._record_event('GHOST_RESET', res['message'], 'INFO')
+        if payload.get('auto_deploy', True):
+            deploy_res = broker_service.agent_brain.deploy_fleet_investments(requested_mode='GHOST')
+            res['deployed'] = deploy_res.get('deployed', [])
+            res['message'] += f" Deployed {len(res['deployed'])} initial Ghost position(s) at live market quotes."
         return res
     return None
 

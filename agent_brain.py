@@ -87,12 +87,31 @@ class AutonomousAgentBrain:
         return self._execute_node_decision(node, node_id, ticker, market_price, price_source, existing_ghost, mode_tag, fund_gate_open)
 
 
+    def _compute_fractional_qty(self, node, market_price):
+        """
+        Compute fractional share quantity sized honestly to available Ghost/Node capital
+        so even a $25.00 checkpoint seed can invest across NVDA, SPY, GLD, and SCHD.
+        """
+        settings = self.db.get_agent_settings()
+        avail_cash = Decimal(str(settings.get('ghost_cash', '25.00')))
+        node_cap = Decimal(str(node['active_capital']))
+        alloc_factor = Decimal('0.80') if int(node['tier']) == 0 else Decimal('0.40')
+        desired = (node_cap * alloc_factor).quantize(Decimal('0.01'))
+        max_per_trade = (avail_cash * Decimal('0.25')).quantize(Decimal('0.01'))
+        target_notional = min(desired, max_per_trade, avail_cash)
+        if target_notional < Decimal('1.00') and avail_cash >= Decimal('1.00'):
+            target_notional = min(Decimal('5.00'), avail_cash)
+        if target_notional <= Decimal('0.05') or market_price <= Decimal('0.00'):
+            return Decimal('0.0000')
+        return max(Decimal('0.0001'), (target_notional / market_price).quantize(Decimal('0.0001')))
+
     def _execute_node_decision(self, node, node_id, ticker, market_price, price_source, existing_ghost, mode_tag, fund_gate_open):
         if not existing_ghost:
-            alloc_factor = Decimal('0.20') if int(node['tier']) == 0 else Decimal('0.15')
-            node_cap = Decimal(str(node['active_capital']))
-            target_notional = min(Decimal('1500.00'), max(Decimal('150.00'), (node_cap * alloc_factor).quantize(Decimal('0.01'))))
-            qty = max(Decimal('1'), (target_notional / market_price).quantize(Decimal('1')))
+            qty = self._compute_fractional_qty(node, market_price)
+            if qty <= Decimal('0.0000'):
+                msg = f'Insufficient Ghost cash to open new {ticker} position.'
+                self._log_reasoning(node_id, ticker, 'HOLD_CASH_RESERVE', msg)
+                return {'ok': False, 'pulse': self.pulse_count, 'node_id': node_id, 'ticker': ticker, 'action': 'HOLD_CASH_RESERVE', 'message': msg}
 
             order_res = self.execution.submit_order(
                 symbol=ticker,
@@ -204,10 +223,9 @@ class AutonomousAgentBrain:
                     deployed.append({'node_id': node_id, 'ticker': ticker, 'action': 'ALREADY_INVESTED_LIVE', 'price': f'{market_price:.2f}'})
                     continue
 
-            alloc_factor = Decimal('0.20') if int(node['tier']) == 0 else Decimal('0.15')
-            node_cap = Decimal(str(node['active_capital']))
-            target_notional = min(Decimal('1200.00'), max(Decimal('150.00'), (node_cap * alloc_factor).quantize(Decimal('0.01'))))
-            qty = max(Decimal('1'), (target_notional / market_price).quantize(Decimal('1')))
+            qty = self._compute_fractional_qty(node, market_price)
+            if qty <= Decimal('0.0000'):
+                continue
 
             res = self.execution.submit_order(
                 symbol=ticker,
