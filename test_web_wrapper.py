@@ -115,6 +115,11 @@ class TestWebWrapperIntegration(unittest.TestCase):
             self.assertTrue(fg_res['ok'])
             self.assertFalse(fg_res['settings']['fund_gate_enabled'])
 
+            # Ensure Node 1 starts flat before testing buy -> sell cycle
+            existing_pos = [p for p in broker_service.db.get_ghost_portfolio_summary()['positions'] if p['symbol'] == 'NVDA']
+            if existing_pos:
+                handle_api_post('/api/agent-pulse', {'node_id': 1, 'override_market_price': 140.00})
+
             # Pulse 1 on Node 1 (NVDA): Autonomous Ghost Buy at $140.00
             p1 = handle_api_post('/api/agent-pulse', {'node_id': 1, 'override_market_price': 140.00})
             self.assertTrue(p1['ok'])
