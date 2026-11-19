@@ -17,7 +17,7 @@ class AutoBrokerDaemon:
         
         self.strategy_engine = VelocityBetaStrategy()
         self.router = MasterRouter(db_conn=None)
-        self.execution = ExecutionEngine()
+        self.execution = ExecutionEngine(router=self.router)
         
     async def ntp_clock_guard(self):
         # Pillar 6: NTP Clock Skew Guard
