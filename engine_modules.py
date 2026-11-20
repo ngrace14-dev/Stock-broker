@@ -78,13 +78,13 @@ class VelocityBetaStrategy:
         cur_p = Decimal(str(current_price)).quantize(Decimal('0.01'))
         sma_spread = ind['sma_spread_pct']
 
-        min_rsi = 15.0 if is_crypto else 45.0
-        max_rsi = 48.0 if is_crypto else 75.0
-        min_spread = -3.50 if is_crypto else -0.50
+        min_rsi = 15.0 if is_crypto else 48.0
+        max_rsi = 48.0 if is_crypto else 68.0
+        min_spread = -3.50 if is_crypto else -0.35
         max_spread = -0.05 if is_crypto else 1.00
         tp_target_pct = 1.80 if is_crypto else 1.50
         tp_min_dlr = Decimal('0.20') if is_crypto else Decimal('0.10')
-        tp_rsi_lvl = 65.0 if is_crypto else 70.0
+        tp_rsi_lvl = 65.0 if is_crypto else 68.0
         ratchet_peak = 0.55 if is_crypto else 0.50
         ratchet_dd = 0.18 if is_crypto else 0.15
         hard_stop_lvl = -2.80 if is_crypto else -0.75

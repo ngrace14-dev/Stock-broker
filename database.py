@@ -846,16 +846,18 @@ class BrokerDatabase:
                 )
                 boosted_ids.append(nid)
             conn.commit()
-            return {
-                'ok': True,
-                'consumed': f'{pending:.2f}',
-                'total_nitro_injected': f'{total_injected:.2f}',
-                'per_node_boost': f'{per_node_boost:.2f}',
-                'nodes_boosted': boost_count,
-                'boosted_node_ids': boosted_ids,
-                'new_ghost_cash': f'{new_cash:.2f}',
-                'message': f'[NITRO PROTOCOL] Supercharged {boost_count} Satellite Node(s) with +${pending:.2f} (+${per_node_boost:.2f}/node)!',
-            }
+        scale_info = self.scale_fleet_automatically()
+        return {
+            'ok': True,
+            'consumed': f'{pending:.2f}',
+            'total_nitro_injected': f'{total_injected:.2f}',
+            'per_node_boost': f'{per_node_boost:.2f}',
+            'nodes_boosted': boost_count,
+            'boosted_node_ids': boosted_ids,
+            'new_ghost_cash': f'{new_cash:.2f}',
+            'fleet_scale': scale_info,
+            'message': f'[NITRO PROTOCOL] Supercharged {boost_count} Satellite Node(s) with +${pending:.2f} (+${per_node_boost:.2f}/node)!',
+        }
 
     @staticmethod
     def _compute_optimal_node_topology(total_equity):

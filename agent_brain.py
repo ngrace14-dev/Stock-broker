@@ -134,7 +134,9 @@ class AutonomousAgentBrain:
             target_notional = min((avail_cash * Decimal('0.80')).quantize(Decimal('0.01')), avail_cash)
         if target_notional < Decimal('1.00') and avail_cash >= Decimal('1.00'):
             target_notional = min(Decimal('20.00') if concentrated else Decimal('5.00'), avail_cash)
-        if target_notional <= Decimal('0.05') or market_price <= Decimal('0.00'):
+        # Self-Sustaining Efficiency Gate: refuse sub-threshold dust trades when node is sized at $100+
+        min_efficient_notional = Decimal('10.00') if node_cap >= Decimal('100.00') else Decimal('5.00')
+        if target_notional < min_efficient_notional or market_price <= Decimal('0.00'):
             return Decimal('0.0000')
         return max(Decimal('0.0001'), (target_notional / market_price).quantize(Decimal('0.0001')))
 
