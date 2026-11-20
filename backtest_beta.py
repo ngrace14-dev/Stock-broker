@@ -38,7 +38,7 @@ class BacktestBetaNode:
 
 STRATEGY_PROFILES = {
     'BASELINE_V37': {
-        'label': 'Baseline v3.7 (Current Live Engine)',
+        'label': 'Baseline v3.7 (Always-On RSI <= 78, +0.35% TP / -0.85% Stop)',
         'min_entry_rsi': 0.0,
         'max_entry_rsi': 78.0,
         'min_sma_spread_pct': -99.0,
@@ -64,34 +64,6 @@ STRATEGY_PROFILES = {
         'ratchet_peak_pct': 0.22,
         'ratchet_drawdown_pct': 0.10,
         'hard_stop_pct': -0.75,
-    },
-    'TIGHT_RATCHET_V38': {
-        'label': 'Tight Ratchet v3.8 (Fast Profit Lock + Tight Stop)',
-        'min_entry_rsi': 25.0,
-        'max_entry_rsi': 68.0,
-        'min_sma_spread_pct': -0.25,
-        'max_sma_spread_pct': 0.25,
-        'cooldown_ticks': 2,
-        'tp_pct': 0.25,
-        'tp_min_dollars': Decimal('0.01'),
-        'tp_rsi': 58.0,
-        'ratchet_peak_pct': 0.18,
-        'ratchet_drawdown_pct': 0.08,
-        'hard_stop_pct': -0.50,
-    },
-    'PATIENT_TREND_V38': {
-        'label': 'Patient Trend v3.8 (Trend Filter + Wider -1.25% Stop)',
-        'min_entry_rsi': 25.0,
-        'max_entry_rsi': 70.0,
-        'min_sma_spread_pct': -0.25,
-        'max_sma_spread_pct': 0.35,
-        'cooldown_ticks': 3,
-        'tp_pct': 0.45,
-        'tp_min_dollars': Decimal('0.02'),
-        'tp_rsi': 64.0,
-        'ratchet_peak_pct': 0.30,
-        'ratchet_drawdown_pct': 0.12,
-        'hard_stop_pct': -1.25,
     },
     'OVERSOLD_REVERSION_V38': {
         'label': 'Oversold Mean-Reversion v3.8 (Buy Pullbacks <=45 RSI, Wide Stop)',
@@ -135,6 +107,20 @@ STRATEGY_PROFILES = {
         'ratchet_drawdown_pct': 0.09,
         'hard_stop_pct': -0.35,
     },
+    'MODERATE_MOMENTUM_V39': {
+        'label': 'Moderate Momentum Bridge v3.9 (RSI 45-68, Spread -0.10% to +0.30%, +0.45% TP / -0.45% Stop)',
+        'min_entry_rsi': 45.0,
+        'max_entry_rsi': 68.0,
+        'min_sma_spread_pct': -0.10,
+        'max_sma_spread_pct': 0.30,
+        'cooldown_ticks': 1,
+        'tp_pct': 0.45,
+        'tp_min_dollars': Decimal('0.02'),
+        'tp_rsi': 60.0,
+        'ratchet_peak_pct': 0.22,
+        'ratchet_drawdown_pct': 0.09,
+        'hard_stop_pct': -0.45,
+    },
 }
 
 
@@ -170,43 +156,55 @@ class StrategyBacktestEngine:
         finally:
             conn.close()
 
-    def fetch_alpaca_historical_stream(self, symbols=('NVDA', 'SPY', 'GLD', 'SCHD'), timeframe='5Min', limit_per_symbol=250):
+    def fetch_alpaca_historical_stream(
+        self,
+        symbols=('NVDA', 'SPY', 'GLD', 'SCHD'),
+        timeframe='15Min',
+        days=60,
+        max_pages=4,
+    ):
         cfg = get_broker_config()
         if not cfg.get('has_alpaca_keys'):
             return []
         sym_list = ','.join(s.strip().upper() for s in symbols)
-        start_dt = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
-        url = (
-            f"https://data.alpaca.markets/v2/stocks/bars?"
-            f"symbols={urllib.parse.quote(sym_list)}&timeframe={timeframe}&start={start_dt}&limit=1000&feed=iex"
-        )
+        start_dt = (datetime.now(timezone.utc) - timedelta(days=int(days))).strftime('%Y-%m-%dT%H:%M:%SZ')
         headers = {
             'APCA-API-KEY-ID': cfg['alpaca_api_key'],
             'APCA-API-SECRET-KEY': cfg['alpaca_secret_key'],
             'Accept': 'application/json',
             'User-Agent': 'StockBroker-v3.7-Backtester/1.0',
         }
-        req = urllib.request.Request(url=url, headers=headers, method='GET')
-        try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                payload = json.loads(resp.read().decode('utf-8'))
-                bars_by_sym = payload.get('bars', {})
-                events = []
-                for sym, bars in bars_by_sym.items():
-                    for b in bars[-limit_per_symbol:]:
-                        events.append({
-                            'timestamp': b.get('t', ''),
-                            'symbol': sym.upper(),
-                            'price': Decimal(str(b.get('c', '0'))).quantize(Decimal('0.01')),
-                            'source': f'ALPACA_HIST_{timeframe}',
-                        })
-                events.sort(key=lambda x: (x['timestamp'], x['symbol']))
-                for idx, ev in enumerate(events, 1):
-                    ev['pulse'] = idx
-                return events
-        except Exception:
-            return []
-
+        events = []
+        page_token = None
+        for _ in range(max_pages):
+            url = (
+                f"https://data.alpaca.markets/v2/stocks/bars?"
+                f"symbols={urllib.parse.quote(sym_list)}&timeframe={timeframe}&start={start_dt}&limit=10000&feed=iex"
+            )
+            if page_token:
+                url += f"&page_token={urllib.parse.quote(page_token)}"
+            req = urllib.request.Request(url=url, headers=headers, method='GET')
+            try:
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    payload = json.loads(resp.read().decode('utf-8'))
+                    bars_by_sym = payload.get('bars', {})
+                    for sym, bars in bars_by_sym.items():
+                        for b in bars:
+                            events.append({
+                                'timestamp': b.get('t', ''),
+                                'symbol': sym.upper(),
+                                'price': Decimal(str(b.get('c', '0'))).quantize(Decimal('0.01')),
+                                'source': f'ALPACA_HIST_{timeframe}_{days}D',
+                            })
+                    page_token = payload.get('next_page_token')
+                    if not page_token:
+                        break
+            except Exception:
+                break
+        events.sort(key=lambda x: (x['timestamp'], x['symbol']))
+        for idx, ev in enumerate(events, 1):
+            ev['pulse'] = idx
+        return events
 
     @staticmethod
     def _compute_indicators(history_deque, current_price):
@@ -245,13 +243,22 @@ class StrategyBacktestEngine:
             'samples': len(series),
         }
 
-    def simulate_profile(self, ticks, profile_key='BASELINE_V37', starting_cash=Decimal('25.00')):
+    def simulate_profile(
+        self,
+        ticks,
+        profile_key='BASELINE_V37',
+        starting_cash=Decimal('25.00'),
+        max_positions=4,
+        allowed_symbols=None,
+    ):
         profile = STRATEGY_PROFILES[profile_key]
-        cash = Decimal(str(starting_cash)).quantize(Decimal('0.01'))
+        start_cash_dec = Decimal(str(starting_cash)).quantize(Decimal('0.01'))
+        cash = start_cash_dec
         history = collections.defaultdict(lambda: collections.deque(maxlen=30))
         positions = {}
         cooldowns = collections.defaultdict(int)
         last_prices = {}
+        allowed_set = {s.upper() for s in allowed_symbols} if allowed_symbols else None
 
         closed_trades = []
         wins = 0
@@ -261,8 +268,13 @@ class StrategyBacktestEngine:
         hard_stops = 0
         filtered_entries = 0
 
+        alloc_fraction = (Decimal('1.00') / Decimal(str(max(1, int(max_positions))))).quantize(Decimal('0.01'))
+        max_cap_per_pos = (start_cash_dec * alloc_fraction).quantize(Decimal('0.01'))
+
         for tick in ticks:
             sym = tick['symbol']
+            if allowed_set and sym not in allowed_set:
+                continue
             cur_p = tick['price']
             if cur_p <= Decimal('0.00'):
                 continue
@@ -272,6 +284,8 @@ class StrategyBacktestEngine:
             spread = ind['sma_spread_pct']
 
             if sym not in positions:
+                if len(positions) >= int(max_positions):
+                    continue
                 if cooldowns[sym] > 0:
                     cooldowns[sym] -= 1
                     filtered_entries += 1
@@ -285,9 +299,7 @@ class StrategyBacktestEngine:
                     filtered_entries += 1
                     continue
 
-                target_notional = min(Decimal('5.00'), (cash * Decimal('0.25')).quantize(Decimal('0.01')), cash)
-                if target_notional < Decimal('1.00') and cash >= Decimal('2.50'):
-                    target_notional = min(Decimal('2.50'), cash)
+                target_notional = min(max_cap_per_pos, cash)
                 if target_notional <= Decimal('0.50'):
                     continue
                 qty = max(Decimal('0.0001'), (target_notional / cur_p).quantize(Decimal('0.0001')))
@@ -350,16 +362,17 @@ class StrategyBacktestEngine:
 
         realized_pnl = sum((Decimal(t['realized_pnl']) for t in closed_trades), Decimal('0.00'))
         total_equity = (cash + open_value).quantize(Decimal('0.01'))
-        net_pnl = (total_equity - starting_cash).quantize(Decimal('0.01'))
-        return_pct = float((net_pnl / starting_cash * Decimal('100.0')).quantize(Decimal('0.02')))
+        net_pnl = (total_equity - start_cash_dec).quantize(Decimal('0.01'))
+        return_pct = float((net_pnl / start_cash_dec * Decimal('100.0')).quantize(Decimal('0.02')))
         total_decided = wins + losses
         win_rate = round((wins / total_decided * 100.0), 1) if total_decided > 0 else 0.0
 
         return {
             'profile_key': profile_key,
             'label': profile['label'],
+            'max_positions': int(max_positions),
             'ticks_processed': len(ticks),
-            'starting_cash': f'{starting_cash:.2f}',
+            'starting_cash': f'{start_cash_dec:.2f}',
             'ending_equity': f'{total_equity:.2f}',
             'realized_pnl': f'{realized_pnl:+.2f}',
             'unrealized_pnl': f'{unrealized_pnl:+.2f}',
@@ -376,17 +389,17 @@ class StrategyBacktestEngine:
             'recent_trades': closed_trades[-8:],
         }
 
-    def run_comparative_suite(self, starting_cash=25.00):
+    def run_comparative_suite(self, starting_cash=25.00, days=60):
         recorded_ticks = self.load_recorded_pulse_stream()
-        alpaca_ticks = self.fetch_alpaca_historical_stream()
+        alpaca_ticks = self.fetch_alpaca_historical_stream(timeframe='15Min', days=days)
         start_dec = Decimal(str(starting_cash)).quantize(Decimal('0.01'))
 
         recorded_results = [
-            self.simulate_profile(recorded_ticks, key, starting_cash=start_dec)
+            self.simulate_profile(recorded_ticks, key, starting_cash=start_dec, max_positions=4)
             for key in STRATEGY_PROFILES
         ]
         alpaca_results = [
-            self.simulate_profile(alpaca_ticks, key, starting_cash=start_dec)
+            self.simulate_profile(alpaca_ticks, key, starting_cash=start_dec, max_positions=4)
             for key in STRATEGY_PROFILES
         ] if alpaca_ticks else []
 
@@ -395,9 +408,9 @@ class StrategyBacktestEngine:
             'recorded_pulse_count': len(recorded_ticks),
             'alpaca_bar_count': len(alpaca_ticks),
             'recorded_comparison': recorded_results,
-            'alpaca_7d_comparison': alpaca_results,
-            'recommended_profile': best_recorded['profile_key'] if best_recorded else 'BASELINE_V37',
-            'recommended_label': best_recorded['label'] if best_recorded else 'Baseline v3.7',
+            'alpaca_comparison': alpaca_results,
+            'recommended_profile': best_recorded['profile_key'] if best_recorded else 'MODERATE_MOMENTUM_V39',
+            'recommended_label': best_recorded['label'] if best_recorded else 'Moderate Momentum Bridge v3.9',
         }
 
 
@@ -416,22 +429,31 @@ def test_backtest_math():
 if __name__ == "__main__":
     test_backtest_math()
     engine = StrategyBacktestEngine()
-    suite = engine.run_comparative_suite(starting_cash=25.00)
-    print(f"\n=== BACKTEST SUITE: {suite['recorded_pulse_count']} Recorded Live Pulses | {suite['alpaca_bar_count']} Alpaca 7-Day 5Min Bars ===")
-    print("\n[A] REPLAY AGAINST RECORDED LIVE PULSES (broker_v37.db):")
-    for r in suite['recorded_comparison']:
-        print(
-            f"  * {r['profile_key']:<20} | Equity: ${r['ending_equity']} (Net: ${r['net_pnl']} / {r['return_pct']}) "
-            f"| Trades: {r['closed_trades']} (W:{r['wins']} / L:{r['losses']} = {r['win_rate']}) "
-            f"| TP:{r['take_profits']} Ratchet:{r['ratchet_saves']} Stops:{r['hard_stops']} | Filtered:{r['filtered_bad_entries']}"
-        )
-    if suite['alpaca_7d_comparison']:
-        print("\n[B] REPLAY AGAINST 7-DAY ALPACA HISTORICAL 5-MIN BARS (NVDA, SPY, GLD, SCHD):")
-        for r in suite['alpaca_7d_comparison']:
+    rec_ticks = engine.load_recorded_pulse_stream()
+    bars_60d = engine.fetch_alpaca_historical_stream(timeframe='1Hour', days=60, max_pages=1)
+    bars_10m = engine.fetch_alpaca_historical_stream(timeframe='1Day', days=300, max_pages=1)
+
+    def _print_table(title, ticks, max_pos=4, allowed_syms=None):
+        print(f"\n=== {title} ({len(ticks)} Ticks | Max Concurrent Nodes: {max_pos}) ===")
+        for key in ('BASELINE_V37', 'ASYMMETRIC_EDGE_V38', 'MOMENTUM_CONFIRM_V38', 'MODERATE_MOMENTUM_V39'):
+            r = engine.simulate_profile(ticks, key, starting_cash=Decimal('25.00'), max_positions=max_pos, allowed_symbols=allowed_syms)
             print(
-                f"  * {r['profile_key']:<20} | Equity: ${r['ending_equity']} (Net: ${r['net_pnl']} / {r['return_pct']}) "
-                f"| Trades: {r['closed_trades']} (W:{r['wins']} / L:{r['losses']} = {r['win_rate']}) "
-                f"| TP:{r['take_profits']} Ratchet:{r['ratchet_saves']} Stops:{r['hard_stops']} | Filtered:{r['filtered_bad_entries']}"
+                f"  * {r['profile_key']:<22} | Equity: ${r['ending_equity']} (Net: ${r['net_pnl']} / {r['return_pct']:>7}) "
+                f"| Trades: {r['closed_trades']:>3} (W:{r['wins']:>2} / L:{r['losses']:>2} = {r['win_rate']:>5}) "
+                f"| TP:{r['take_profits']:>2} Ratchet:{r['ratchet_saves']:>2} Stops:{r['hard_stops']:>2} | Filtered:{r['filtered_bad_entries']}"
             )
-    print(f"\nRecommended Profile: {suite['recommended_profile']} ({suite['recommended_label']})")
+
+    _print_table("[1] RECORDED LIVE PULSES (broker_v37.db) - 4-NODE SPLIT ($6.25/trade)", rec_ticks, max_pos=4)
+    _print_table("[2] RECORDED LIVE PULSES (broker_v37.db) - OPTION 3: 1-NODE CONCENTRATED ($25/trade)", rec_ticks, max_pos=1)
+
+    if bars_60d:
+        _print_table("[3] 60-DAY ALPACA HISTORICAL BARS - 4-NODE SPLIT ($6.25/trade)", bars_60d, max_pos=4)
+        _print_table("[4] 60-DAY ALPACA HISTORICAL BARS - OPTION 3: 1-NODE CONCENTRATED ($25/trade)", bars_60d, max_pos=1)
+
+    if bars_10m:
+        _print_table("[5] 10-MONTH (300-DAY) ALPACA HISTORICAL BARS - 4-NODE SPLIT ($6.25/trade)", bars_10m, max_pos=4)
+        _print_table("[6] 10-MONTH (300-DAY) ALPACA HISTORICAL BARS - OPTION 3: 1-NODE CONCENTRATED ($25/trade)", bars_10m, max_pos=1)
+
+
+
 

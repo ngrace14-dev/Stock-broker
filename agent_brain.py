@@ -97,20 +97,24 @@ class AutonomousAgentBrain:
         )
 
 
-    def _compute_fractional_qty(self, node, market_price):
+    def _compute_fractional_qty(self, node, market_price, concentrated=False):
         """
-        Compute fractional share quantity sized honestly to available Ghost/Node capital
-        so even a $25.00 checkpoint seed can invest across NVDA, SPY, GLD, and SCHD.
+        Compute fractional share quantity sized honestly to available Ghost/Node capital.
+        When concentrated=True (Option 3 High-Conviction Mode), deploys up to 80% of available
+        Ghost cash into the highest-conviction entry to eliminate micro-lot cent rounding drag.
         """
         settings = self.db.get_agent_settings()
         avail_cash = Decimal(str(settings.get('ghost_cash', '25.00')))
         node_cap = Decimal(str(node['active_capital']))
         alloc_factor = Decimal('0.80') if int(node['tier']) == 0 else Decimal('0.40')
         desired = (node_cap * alloc_factor).quantize(Decimal('0.01'))
-        max_per_trade = (avail_cash * Decimal('0.25')).quantize(Decimal('0.01'))
+        cap_ratio = Decimal('0.80') if concentrated else Decimal('0.25')
+        max_per_trade = (avail_cash * cap_ratio).quantize(Decimal('0.01'))
         target_notional = min(desired, max_per_trade, avail_cash)
+        if concentrated and avail_cash <= Decimal('100.00'):
+            target_notional = min(max_per_trade, avail_cash)
         if target_notional < Decimal('1.00') and avail_cash >= Decimal('1.00'):
-            target_notional = min(Decimal('5.00'), avail_cash)
+            target_notional = min(Decimal('20.00') if concentrated else Decimal('5.00'), avail_cash)
         if target_notional <= Decimal('0.05') or market_price <= Decimal('0.00'):
             return Decimal('0.0000')
         return max(Decimal('0.0001'), (target_notional / market_price).quantize(Decimal('0.0001')))
@@ -148,7 +152,7 @@ class AutonomousAgentBrain:
                 self._log_reasoning(node_id, ticker, eval_res['signal'], eval_res['reason'])
                 return {'ok': True, 'pulse': self.pulse_count, 'node_id': node_id, 'ticker': ticker, 'action': eval_res['signal'], 'message': self.last_decision_summary}
 
-            qty = self._compute_fractional_qty(node, market_price)
+            qty = self._compute_fractional_qty(node, market_price, concentrated=True)
             if qty <= Decimal('0.0000'):
                 msg = f'Insufficient Ghost cash to open new {ticker} position.'
                 self._record_pulse_audit(node_id, ticker, market_price, price_source, ind, 'FLAT_LOW_CASH', 'HOLD_CASH_RESERVE', reason=msg)
