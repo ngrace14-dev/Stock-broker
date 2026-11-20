@@ -1,12 +1,15 @@
 import asyncio
+import base64
+import hmac
 import json
 import logging
 import os
 import time
 from decimal import Decimal
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from agent_brain import AutonomousAgentBrain
 from backtest_beta import BacktestBetaNode
@@ -470,64 +473,135 @@ def handle_api_post(path, payload):
 
 
 class BrokerHTTPRequestHandler(BaseHTTPRequestHandler):
-    def _send_json(self, data, status=200):
+    def _send_json(self, data, status=200, extra_headers=None):
         body = json.dumps(data).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_html(self, html_text, status=200):
+    def _send_html(self, html_text, status=200, extra_headers=None):
         body = html_text.encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
+    def _check_auth(self, parsed_url):
+        """Verifies personal password when REMOTE_AUTH_PASS is configured in .env."""
+        cfg = get_broker_config()
+        if not cfg.get('has_remote_auth'):
+            return True, {}
+
+        expected_pass = cfg['remote_auth_pass']
+
+        # 1. Query param (?pass=...) sets HttpOnly cookie so subsequent fetch calls work
+        query_params = parse_qs(parsed_url.query)
+        if 'pass' in query_params and query_params['pass']:
+            if hmac.compare_digest(query_params['pass'][0], expected_pass):
+                return True, {'Set-Cookie': f'broker_auth={expected_pass}; Path=/; HttpOnly; SameSite=Lax'}
+
+        # 2. X-Access-Token header
+        token_header = self.headers.get('X-Access-Token', '').strip()
+        if token_header and hmac.compare_digest(token_header, expected_pass):
+            return True, {}
+
+        # 3. Authorization header (Basic or Bearer)
+        auth_header = self.headers.get('Authorization', '').strip()
+        if auth_header.lower().startswith('bearer '):
+            if hmac.compare_digest(auth_header[7:].strip(), expected_pass):
+                return True, {}
+        elif auth_header.lower().startswith('basic '):
+            try:
+                decoded = base64.b64decode(auth_header[6:].strip()).decode('utf-8', errors='replace')
+                basic_pass = decoded.split(':', 1)[1] if ':' in decoded else decoded
+                if hmac.compare_digest(basic_pass, expected_pass):
+                    return True, {}
+            except Exception:
+                pass
+
+        # 4. Session cookie (broker_auth)
+        cookie_header = self.headers.get('Cookie', '')
+        if cookie_header:
+            cookie = SimpleCookie()
+            try:
+                cookie.load(cookie_header)
+                if 'broker_auth' in cookie and hmac.compare_digest(cookie['broker_auth'].value, expected_pass):
+                    return True, {}
+            except Exception:
+                pass
+
+        auth_headers = {'WWW-Authenticate': 'Basic realm="Auto-Broker Terminal v3.7 (Enter Personal Password)"'}
+        if parsed_url.path.startswith('/api/'):
+            self._send_json(
+                {'ok': False, 'error': 'Unauthorized: Personal beta password required.'},
+                status=401,
+                extra_headers=auth_headers,
+            )
+        else:
+            self._send_html(
+                '<h2>401 Unauthorized — Auto-Broker Terminal</h2><p>Valid personal password required.</p>',
+                status=401,
+                extra_headers=auth_headers,
+            )
+        return False, {}
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        authorized, extra_headers = self._check_auth(parsed)
+        if not authorized:
+            return
         if parsed.path in ('/', '/index.html'):
             if TEMPLATE_PATH.exists():
-                self._send_html(TEMPLATE_PATH.read_text(encoding='utf-8'))
+                self._send_html(TEMPLATE_PATH.read_text(encoding='utf-8'), extra_headers=extra_headers)
             else:
-                self._send_html('<h1>Template missing</h1>', status=500)
+                self._send_html('<h1>Template missing</h1>', status=500, extra_headers=extra_headers)
             return
         if parsed.path == '/api/state':
-            self._send_json(broker_service.get_dashboard_state())
+            self._send_json(broker_service.get_dashboard_state(), extra_headers=extra_headers)
             return
         if parsed.path == '/api/ledger/reconciliation':
             acct = broker_service.execution.get_account_summary()
             pos = broker_service.execution.get_positions()
-            self._send_json(broker_service.get_ledger_reconciliation(acct, pos))
+            self._send_json(broker_service.get_ledger_reconciliation(acct, pos), extra_headers=extra_headers)
             return
         if parsed.path == '/api/health':
-            self._send_json({'status': 'ok', 'version': 'v3.7 DEFCON 0'})
+            self._send_json({'status': 'ok', 'version': 'v3.7 DEFCON 0'}, extra_headers=extra_headers)
             return
-        self._send_json({'error': 'Not found'}, status=404)
+        self._send_json({'error': 'Not found'}, status=404, extra_headers=extra_headers)
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        authorized, extra_headers = self._check_auth(parsed)
+        if not authorized:
+            return
         content_len = int(self.headers.get('Content-Length', '0'))
         raw_body = self.rfile.read(content_len).decode('utf-8') if content_len > 0 else '{}'
         try:
             payload = json.loads(raw_body) if raw_body else {}
         except json.JSONDecodeError:
-            self._send_json({'ok': False, 'message': 'Invalid JSON payload'}, status=400)
+            self._send_json({'ok': False, 'message': 'Invalid JSON payload'}, status=400, extra_headers=extra_headers)
             return
 
         try:
             result = handle_api_post(parsed.path, payload)
             if result is None:
-                self._send_json({'ok': False, 'message': f'Unknown endpoint {parsed.path}'}, status=404)
+                self._send_json({'ok': False, 'message': f'Unknown endpoint {parsed.path}'}, status=404, extra_headers=extra_headers)
                 return
-            self._send_json(result, status=200)
+            self._send_json(result, status=200, extra_headers=extra_headers)
         except Exception as exc:
             logger.exception('API POST error')
-            self._send_json({'ok': False, 'message': str(exc)}, status=400)
+            self._send_json({'ok': False, 'message': str(exc)}, status=400, extra_headers=extra_headers)
 
     def log_message(self, fmt, *args):
         logger.info('%s - %s', self.address_string(), fmt % args)

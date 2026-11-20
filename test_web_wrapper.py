@@ -1,11 +1,15 @@
+import base64
 import json
+import os
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from backtest_beta import test_backtest_math
+from config import get_broker_config
 from database import BrokerDatabase
 from ledger_validator import test_v37_invariants
 from server import BrokerHTTPRequestHandler, broker_service, handle_api_post
@@ -78,9 +82,21 @@ class TestWebWrapperIntegration(unittest.TestCase):
         t = threading.Thread(target=httpd.serve_forever, daemon=True)
         t.start()
         try:
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=5) as resp:
+            cfg = get_broker_config()
+            test_pass = cfg.get('remote_auth_pass') or 'broker1414'
+            os.environ['REMOTE_AUTH_PASS'] = test_pass
+
+            # 1. Verify unauthenticated request is rejected with 401 when personal password is set
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(f'http://127.0.0.1:{port}/api/state', timeout=5)
+            self.assertEqual(ctx.exception.code, 401)
+            ctx.exception.close()
+
+            # 2. Verify query parameter (?pass=...) works and sets session cookie
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/?pass={test_pass}', timeout=5) as resp:
                 html = resp.read().decode('utf-8')
                 self.assertEqual(resp.status, 200)
+                self.assertIn('broker_auth=', resp.headers.get('Set-Cookie', ''))
                 self.assertIn('meta name="viewport"', html)
                 self.assertIn('AUTO-BROKER TERMINAL // v3.7 DEFCON 0', html)
                 self.assertIn('dripBucketsGrid', html)
@@ -90,14 +106,25 @@ class TestWebWrapperIntegration(unittest.TestCase):
                     self.assertIn(f'id="tabBtn-{tab_key}"', html)
                     self.assertIn(f'id="tabSection-{tab_key}"', html)
 
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/state', timeout=5) as resp:
+            # 3. Verify Basic Auth header works (browser password prompt flow)
+            b64_token = base64.b64encode(f'commander:{test_pass}'.encode('utf-8')).decode('utf-8')
+            req_state = urllib.request.Request(
+                f'http://127.0.0.1:{port}/api/state',
+                headers={'Authorization': f'Basic {b64_token}'},
+            )
+            with urllib.request.urlopen(req_state, timeout=5) as resp:
                 payload = json.loads(resp.read().decode('utf-8'))
                 self.assertEqual(resp.status, 200)
                 self.assertIn('v3.7 DEFCON 0', payload['system']['version'])
                 self.assertIn('internal_total_vault', payload['ledger'])
                 self.assertEqual(len(payload['ledger']['reconciliation_rows']), 3)
 
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/ledger/reconciliation', timeout=5) as resp:
+            # 4. Verify X-Access-Token header works
+            req_recon = urllib.request.Request(
+                f'http://127.0.0.1:{port}/api/ledger/reconciliation',
+                headers={'X-Access-Token': test_pass},
+            )
+            with urllib.request.urlopen(req_recon, timeout=5) as resp:
                 recon = json.loads(resp.read().decode('utf-8'))
                 self.assertEqual(resp.status, 200)
                 self.assertTrue(recon['invariants_verified'])

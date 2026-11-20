@@ -30,6 +30,7 @@ def is_real_credential(val):
         'YOUR_ALPACA_API_KEY_HERE',
         'YOUR_ALPACA_SECRET_KEY_HERE',
         'YOUR_GEMINI_API_KEY_HERE',
+        'YOUR_PERSONAL_BETA_PASSWORD_HERE',
         'CHANGE_ME',
         'NONE',
         'NULL',
@@ -46,9 +47,12 @@ def get_broker_config():
     gemini_key = os.environ.get('GEMINI_API_KEY', '').strip()
     host = os.environ.get('HOST', '127.0.0.1').strip()
     port = int(os.environ.get('PORT', '8000').strip())
+    remote_user = os.environ.get('REMOTE_AUTH_USER', 'commander').strip() or 'commander'
+    remote_pass = os.environ.get('REMOTE_AUTH_PASS', '').strip()
 
     has_alpaca_keys = is_real_credential(api_key) and is_real_credential(secret_key)
     has_gemini_key = is_real_credential(gemini_key)
+    has_remote_pass = is_real_credential(remote_pass)
 
     return {
         'alpaca_api_key': api_key if has_alpaca_keys else '',
@@ -60,5 +64,8 @@ def get_broker_config():
         'has_gemini_key': has_gemini_key,
         'host': host,
         'port': port,
+        'remote_auth_user': remote_user,
+        'remote_auth_pass': remote_pass if has_remote_pass else '',
+        'has_remote_auth': has_remote_pass,
         'key_preview': (api_key[:4] + '...' + api_key[-4:]) if has_alpaca_keys and len(api_key) >= 8 else 'NOT_CONFIGURED',
     }
