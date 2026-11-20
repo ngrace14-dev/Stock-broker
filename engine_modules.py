@@ -72,7 +72,8 @@ class VelocityBetaStrategy:
 
     def evaluate_position_action(self, symbol, current_price, existing_position=None, force_close=False):
         sym = str(symbol).strip().upper()
-        is_crypto = '/' in sym or sym in ('BTCUSD', 'ETHUSD')
+        # MarketBehaviorSwitch: Automatically toggle between 24/7 Crypto Satellite rules and Hybrid Core-Satellite Equity rules
+        is_crypto = '/' in sym or sym in ('BTCUSD', 'ETHUSD', 'SOLUSD')
         ind = self.compute_indicators(sym, current_price)
         cur_p = Decimal(str(current_price)).quantize(Decimal('0.01'))
         sma_spread = ind['sma_spread_pct']
@@ -226,7 +227,8 @@ class VelocityBetaStrategy:
             ),
         }
 
-
     def evaluate_signal(self, data_buffer):
         return 'BUY'
+
+
 
