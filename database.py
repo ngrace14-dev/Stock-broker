@@ -1,4 +1,4 @@
-import contextlib
+need a critical failure model if thimport contextlib
 import hashlib
 import json
 import sqlite3
@@ -162,38 +162,10 @@ class BrokerDatabase:
                     audit_hash TEXT NOT NULL,
                     executed_at_utc TEXT NOT NULL
                 );
-
-                CREATE TABLE IF NOT EXISTS market_pulse_audit (
-                    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    pulse_number INTEGER NOT NULL,
-                    timestamp_utc TEXT NOT NULL,
-                    node_id INTEGER NOT NULL,
-                    symbol TEXT NOT NULL,
-                    market_price TEXT NOT NULL,
-                    price_source TEXT NOT NULL,
-                    rsi TEXT NOT NULL DEFAULT '50.0',
-                    sma TEXT NOT NULL DEFAULT '0.00',
-                    position_state TEXT NOT NULL,
-                    action_taken TEXT NOT NULL,
-                    qty TEXT NOT NULL DEFAULT '0.0000',
-                    realized_pnl TEXT NOT NULL DEFAULT '0.00',
-                    ghost_equity_after TEXT NOT NULL DEFAULT '0.00',
-                    reason TEXT NOT NULL
-                );
                 """
             )
             conn.commit()
-        self._ensure_nitro_columns()
         self._seed_defaults()
-
-    def _ensure_nitro_columns(self):
-        with self._lock, self._connect() as conn:
-            cols = {r['name'] for r in conn.execute('PRAGMA table_info(global_ledger)').fetchall()}
-            if 'pending_nitro_injection' not in cols:
-                conn.execute("ALTER TABLE global_ledger ADD COLUMN pending_nitro_injection TEXT NOT NULL DEFAULT '0.00'")
-            if 'total_nitro_injected' not in cols:
-                conn.execute("ALTER TABLE global_ledger ADD COLUMN total_nitro_injected TEXT NOT NULL DEFAULT '0.00'")
-            conn.commit()
 
     def _seed_defaults(self):
         now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
@@ -703,7 +675,7 @@ class BrokerDatabase:
             'message': f'[GHOST PORTFOLIO] {side.upper()} {qty_dec} {symbol} @ ${price_dec:.2f} ({price_source}) | Realized P&L: ${realized_pnl:.2f} | SHA256: {audit_hash}',
         }
 
-    def reset_ghost_portfolio(self, starting_cash='100.00', reset_nodes=True):
+    def reset_ghost_portfolio(self, starting_cash='25.00', reset_nodes=True):
         """
         Hard-reset the Ghost Portfolio to a user-chosen starting capital (e.g., $25.00 checkpoint seed).
         Wipes all prior ghost positions, ghost trades, and test artifacts so overnight results are 100% pure.
@@ -717,7 +689,6 @@ class BrokerDatabase:
             conn.execute('DELETE FROM ghost_positions')
             conn.execute('DELETE FROM ghost_trades')
             conn.execute('DELETE FROM orders')
-            conn.execute('DELETE FROM market_pulse_audit')
             conn.execute(
                 """
                 UPDATE agent_settings
@@ -729,33 +700,13 @@ class BrokerDatabase:
             )
             if reset_nodes:
                 conn.execute('DELETE FROM nodes')
-                target_nodes, per_node_cap, scale_tier = self._compute_optimal_node_topology(cash)
-                blueprint = [
-                    ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'NVDA', 'SOXL'),
-                    ('CORE_TREND_ANCHOR', 'SWING', 'TQQQ', 'QQQ'),
-                    ('SATELLITE_CRYPTO', 'CRYPTO_24_7', 'BTC/USD', 'ETH/USD'),
-                    ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'TSLA', 'AMD'),
-                    ('CORE_TREND_ANCHOR', 'PERMANENT_ANCHOR', 'SPY', 'GLD'),
+                per_node_cap = max(Decimal('6.25'), floor_cent(cash / Decimal('4')))
+                seed_nodes = [
+                    ('VELOCITY_BETA', 'HIGH_VELOCITY', 'NVDA', 'AMD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                    ('HARDWARE_TECH', 'SWING', 'SPY', 'QQQ', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                    ('PRECIOUS_METALS', 'MACRO_CYCLICAL', 'GLD', 'SLV', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                    ('DIVIDEND_INSURER', 'PERMANENT_ANCHOR', 'SCHD', 'VYM', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
                 ]
-                seed_nodes = []
-                for idx in range(target_nodes):
-                    div, cad, tick, btick = blueprint[idx % len(blueprint)]
-                    if idx >= len(blueprint):
-                        tick = f"{tick}"
-                    drip_t = max(Decimal('50.00'), floor_cent(per_node_cap * Decimal('0.50')))
-                    seed_nodes.append((
-                        div,
-                        cad,
-                        tick,
-                        btick,
-                        'ACTIVE',
-                        0,
-                        f'{per_node_cap:.2f}',
-                        f'{per_node_cap:.2f}',
-                        f'{per_node_cap:.2f}',
-                        '0.00',
-                        f'{drip_t:.2f}',
-                    ))
                 for div, cad, tick, btick, st, tier, start_cap, act_cap, cold, drip, target in seed_nodes:
                     conn.execute(
                         """
@@ -774,349 +725,3 @@ class BrokerDatabase:
             'message': f'Ghost Portfolio cleanly reset to ${cash:.2f} starting capital (0 trades, 0 open positions, pure market-price tracking).',
         }
 
-    def inject_nitro_funds(self, amount='100.00', queue_for_pulse=False):
-        """
-        Nitro Fund Protocol:
-        Queues or immediately deploys a monthly/ad-hoc capital injection (e.g. $100.00)
-        directly into SATELLITE_ALPHA nodes' active_capital so 100% of Nitro funds are
-        immediately leveraged on the next high-conviction signal instead of sitting as dead cash.
-        """
-        amt = Decimal(str(amount)).quantize(Decimal('0.01'))
-        if amt <= Decimal('0.00'):
-            raise ValueError('Nitro injection amount must be greater than $0.00.')
-        with self._lock, self._connect() as conn:
-            row = conn.execute('SELECT pending_nitro_injection FROM global_ledger WHERE id = 1').fetchone()
-            cur_pending = Decimal(str(row['pending_nitro_injection'])) if row and row['pending_nitro_injection'] else Decimal('0.00')
-            new_pending = (cur_pending + amt).quantize(Decimal('0.01'))
-            conn.execute(
-                'UPDATE global_ledger SET pending_nitro_injection = ? WHERE id = 1',
-                (f'{new_pending:.2f}',),
-            )
-            conn.commit()
-        if not queue_for_pulse:
-            return self.consume_pending_nitro_injection()
-        return {
-            'ok': True,
-            'queued_nitro': f'{new_pending:.2f}',
-            'message': f'Queued +${amt:.2f} Nitro Fund injection for next Agent Brain pulse.',
-        }
-
-    def consume_pending_nitro_injection(self):
-        with self._lock, self._connect() as conn:
-            row = conn.execute(
-                'SELECT pending_nitro_injection, total_nitro_injected FROM global_ledger WHERE id = 1'
-            ).fetchone()
-            if not row:
-                return {'ok': True, 'consumed': '0.00', 'nodes_boosted': 0}
-            pending = Decimal(str(row['pending_nitro_injection'] or '0.00')).quantize(Decimal('0.01'))
-            if pending <= Decimal('0.00'):
-                return {'ok': True, 'consumed': '0.00', 'nodes_boosted': 0}
-
-            total_injected = (Decimal(str(row['total_nitro_injected'] or '0.00')) + pending).quantize(Decimal('0.01'))
-            conn.execute(
-                "UPDATE global_ledger SET pending_nitro_injection = '0.00', total_nitro_injected = ? WHERE id = 1",
-                (f'{total_injected:.2f}',),
-            )
-
-            ag = conn.execute('SELECT ghost_starting_cash, ghost_cash FROM agent_settings WHERE id = 1').fetchone()
-            new_start = (Decimal(str(ag['ghost_starting_cash'])) + pending).quantize(Decimal('0.01'))
-            new_cash = (Decimal(str(ag['ghost_cash'])) + pending).quantize(Decimal('0.01'))
-            conn.execute(
-                'UPDATE agent_settings SET ghost_starting_cash = ?, ghost_cash = ? WHERE id = 1',
-                (f'{new_start:.2f}', f'{new_cash:.2f}'),
-            )
-
-            sat_nodes = conn.execute(
-                "SELECT node_id, active_capital FROM nodes WHERE status = 'ACTIVE' AND division IN ('SATELLITE_ALPHA', 'VELOCITY_BETA') ORDER BY node_id ASC"
-            ).fetchall()
-            if not sat_nodes:
-                sat_nodes = conn.execute("SELECT node_id, active_capital FROM nodes WHERE status = 'ACTIVE' ORDER BY node_id ASC").fetchall()
-
-            boost_count = len(sat_nodes)
-            per_node_boost = floor_cent(pending / Decimal(str(max(1, boost_count))))
-            remainder = (pending - (per_node_boost * Decimal(str(boost_count)))).quantize(Decimal('0.01'))
-            boosted_ids = []
-            for idx, n in enumerate(sat_nodes):
-                nid = int(n['node_id'])
-                add_amt = per_node_boost + (remainder if idx == 0 else Decimal('0.00'))
-                new_cap = (Decimal(str(n['active_capital'])) + add_amt).quantize(Decimal('0.01'))
-                conn.execute(
-                    'UPDATE nodes SET active_capital = ?, daily_starting_capital = ?, daily_settled_budget = ? WHERE node_id = ?',
-                    (f'{new_cap:.2f}', f'{new_cap:.2f}', f'{new_cap:.2f}', nid),
-                )
-                boosted_ids.append(nid)
-            conn.commit()
-        scale_info = self.scale_fleet_automatically()
-        return {
-            'ok': True,
-            'consumed': f'{pending:.2f}',
-            'total_nitro_injected': f'{total_injected:.2f}',
-            'per_node_boost': f'{per_node_boost:.2f}',
-            'nodes_boosted': boost_count,
-            'boosted_node_ids': boosted_ids,
-            'new_ghost_cash': f'{new_cash:.2f}',
-            'fleet_scale': scale_info,
-            'message': f'[NITRO PROTOCOL] Supercharged {boost_count} Satellite Node(s) with +${pending:.2f} (+${per_node_boost:.2f}/node)!',
-        }
-
-    @staticmethod
-    def _compute_optimal_node_topology(total_equity):
-        """
-        Infinite-Scale Adaptive Fleet Topology ($25.00 to $1,000,000,000,000+):
-        - < $200.00 (e.g. $25.00 Micro-Seed): Consolidates 100% into 1 High-Conviction Sniper Node
-          to eliminate transaction friction drag until equity reaches $200.00+.
-        - $200.00 - $499.99: Scales linearly at 1 node per $100.00 (2 to 4 nodes).
-        - $500.00 - $1,000,000,000,000+ (Trillion-Scale): Operates the 5-Node Tandem Core-Satellite
-          architecture, scaling per-node capital and drip targets proportionally without ceilings.
-        """
-        eq = Decimal(str(total_equity)).quantize(Decimal('0.01'))
-        if eq < Decimal('200.00'):
-            return 1, eq, 'CONSOLIDATED_1_NODE_SNIPER'
-        if eq < Decimal('500.00'):
-            n_cnt = int(eq // Decimal('100.00'))
-            return n_cnt, floor_cent(eq / Decimal(str(n_cnt))), f'BRANCHING_{n_cnt}_NODE_FLEET'
-        n_cnt = 5
-        if eq >= Decimal('1000000000.00'):
-            tier_label = 'SOVEREIGN_TRILLION_5_NODE_TANDEM'
-        elif eq >= Decimal('1000000.00'):
-            tier_label = 'INSTITUTIONAL_MILLION_5_NODE_TANDEM'
-        else:
-            tier_label = 'TANDEM_5_NODE_HYBRID_FLEET'
-        return n_cnt, floor_cent(eq / Decimal(str(n_cnt))), tier_label
-
-    def scale_fleet_automatically(self):
-        summary = self.get_ghost_portfolio_summary()
-        total_eq = Decimal(str(summary['total_equity']))
-        target_nodes, per_node_cap, scale_tier = self._compute_optimal_node_topology(total_eq)
-        target_blueprint = [
-            ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'NVDA', 'SOXL'),
-            ('CORE_TREND_ANCHOR', 'SWING', 'TQQQ', 'QQQ'),
-            ('SATELLITE_CRYPTO', 'CRYPTO_24_7', 'BTC/USD', 'ETH/USD'),
-            ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'TSLA', 'AMD'),
-            ('CORE_TREND_ANCHOR', 'PERMANENT_ANCHOR', 'SPY', 'GLD'),
-        ]
-        now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-        spawned = []
-        consolidated = []
-        with self._lock, self._connect() as conn:
-            active_nodes = conn.execute("SELECT * FROM nodes WHERE status = 'ACTIVE' ORDER BY node_id ASC").fetchall()
-            cur_count = len(active_nodes)
-
-            if cur_count > target_nodes and target_nodes == 1:
-                primary = active_nodes[0]
-                for extra in active_nodes[1:]:
-                    conn.execute(
-                        "UPDATE nodes SET status = 'STANDBY_CONSOLIDATED', active_capital = '0.00' WHERE node_id = ?",
-                        (int(extra['node_id']),),
-                    )
-                    consolidated.append({'node_id': extra['node_id'], 'ticker': extra['assigned_ticker']})
-                conn.execute(
-                    "UPDATE nodes SET active_capital = ?, daily_starting_capital = ?, daily_settled_budget = ? WHERE node_id = ?",
-                    (f'{total_eq:.2f}', f'{total_eq:.2f}', f'{total_eq:.2f}', int(primary['node_id'])),
-                )
-                conn.commit()
-                return {
-                    'ok': True,
-                    'scale_tier': scale_tier,
-                    'spawned_count': 0,
-                    'consolidated_count': len(consolidated),
-                    'consolidated': consolidated,
-                    'active_count': 1,
-                    'per_node_capital': f'{total_eq:.2f}',
-                }
-
-            existing_tickers = {str(n['assigned_ticker']).upper() for n in active_nodes}
-            drip_t = max(Decimal('50.00'), floor_cent(per_node_cap * Decimal('0.50')))
-            for div, cad, tick, btick in target_blueprint:
-                if cur_count >= target_nodes:
-                    break
-                if tick in existing_tickers:
-                    continue
-                cur = conn.execute(
-                    """
-                    INSERT INTO nodes (
-                        division, cadence_class, assigned_ticker, backup_ticker, status, tier,
-                        tier_starting_active_capital, active_capital, cold_storage, drip_bucket,
-                        drip_target, daily_starting_capital, daily_settled_budget, created_at
-                    ) VALUES (?, ?, ?, ?, 'ACTIVE', 0, ?, ?, ?, '0.00', ?, ?, ?, ?)
-                    """,
-                    (
-                        div,
-                        cad,
-                        tick,
-                        btick,
-                        f'{per_node_cap:.2f}',
-                        f'{per_node_cap:.2f}',
-                        f'{per_node_cap:.2f}',
-                        f'{drip_t:.2f}',
-                        f'{per_node_cap:.2f}',
-                        f'{per_node_cap:.2f}',
-                        now_utc,
-                    ),
-                )
-                cur_count += 1
-                existing_tickers.add(tick)
-                spawned.append({'node_id': cur.lastrowid, 'ticker': tick, 'division': div})
-
-            if spawned:
-                for n in active_nodes:
-                    if Decimal(str(n['active_capital'])) > per_node_cap:
-                        conn.execute(
-                            "UPDATE nodes SET active_capital = ?, drip_target = ? WHERE node_id = ?",
-                            (f'{per_node_cap:.2f}', f'{drip_t:.2f}', int(n['node_id'])),
-                        )
-            conn.commit()
-        return {
-            'ok': True,
-            'scale_tier': scale_tier,
-            'spawned_count': len(spawned),
-            'spawned': spawned,
-            'consolidated_count': 0,
-            'active_count': cur_count,
-            'per_node_capital': f'{per_node_cap:.2f}',
-        }
-
-
-
-    def log_market_pulse_audit(
-        self,
-        pulse_number,
-        node_id,
-        symbol,
-        market_price,
-        price_source,
-        rsi,
-        sma,
-        position_state,
-        action_taken,
-        qty='0.0000',
-        realized_pnl='0.00',
-        ghost_equity_after='0.00',
-        reason='',
-    ):
-        now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-        with self._lock, self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO market_pulse_audit (
-                    pulse_number, timestamp_utc, node_id, symbol, market_price, price_source,
-                    rsi, sma, position_state, action_taken, qty, realized_pnl, ghost_equity_after, reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    int(pulse_number),
-                    now_utc,
-                    int(node_id),
-                    str(symbol).upper(),
-                    f'{Decimal(str(market_price)):.2f}',
-                    str(price_source),
-                    str(rsi),
-                    f'{Decimal(str(sma)):.2f}',
-                    str(position_state),
-                    str(action_taken),
-                    str(qty),
-                    f'{Decimal(str(realized_pnl)):.2f}',
-                    f'{Decimal(str(ghost_equity_after)):.2f}',
-                    str(reason),
-                ),
-            )
-            conn.commit()
-
-    def get_market_pulse_audit_log(self, limit=50):
-        with self._lock, self._connect() as conn:
-            rows = conn.execute(
-                'SELECT * FROM market_pulse_audit ORDER BY audit_id DESC LIMIT ?',
-                (int(limit),),
-            ).fetchall()
-            return [dict(r) for r in rows]
-
-    def get_engine_diagnostics(self):
-        """
-        Aggregates per-node and fleet-wide performance telemetry from market_pulse_audit,
-        ghost_trades, ghost_positions, and nodes to pinpoint exactly where the engine is strong vs. weak.
-        """
-        with self._lock, self._connect() as conn:
-            nodes = [dict(r) for r in conn.execute('SELECT * FROM nodes ORDER BY node_id ASC').fetchall()]
-            positions = {r['symbol']: dict(r) for r in conn.execute('SELECT * FROM ghost_positions').fetchall()}
-            trades = [dict(r) for r in conn.execute('SELECT * FROM ghost_trades ORDER BY trade_id DESC LIMIT 200').fetchall()]
-            pulses = [dict(r) for r in conn.execute('SELECT * FROM market_pulse_audit ORDER BY audit_id DESC LIMIT 200').fetchall()]
-
-        node_reports = []
-        strong_count = 0
-        weak_count = 0
-
-        for n in nodes:
-            nid = int(n['node_id'])
-            sym = str(n['assigned_ticker']).upper()
-            n_trades = [t for t in trades if int(t['node_id']) == nid or str(t['symbol']).upper() == sym]
-            sells = [t for t in n_trades if str(t['side']).lower() == 'sell']
-            wins = [t for t in sells if Decimal(str(t['realized_pnl'])) > Decimal('0.00')]
-            losses = [t for t in sells if Decimal(str(t['realized_pnl'])) < Decimal('0.00')]
-            realized_sum = sum((Decimal(str(t['realized_pnl'])) for t in sells), Decimal('0.00'))
-
-            n_pulses = [p for p in pulses if int(p['node_id']) == nid or str(p['symbol']).upper() == sym]
-            hard_stops = sum(1 for p in n_pulses if 'SELL_HARD_STOP' in str(p['action_taken']))
-            take_profits = sum(1 for p in n_pulses if 'SELL_TAKE_PROFIT' in str(p['action_taken']) or 'SELL_TRAILING_RATCHET' in str(p['action_taken']))
-            giveback_warnings = sum(1 for p in n_pulses if 'WEAK_PROFIT_GIVEBACK' in str(p['reason']) or 'WEAK_REVERSAL_FROM_PEAK' in str(p['reason']))
-
-            pos = positions.get(sym)
-            unrl_pnl = Decimal(str(pos['unrealized_pnl'])) if pos else Decimal('0.00')
-            unrl_pct = Decimal(str(pos['unrealized_pnl_pct'])) if pos else Decimal('0.00')
-            net_node_pnl = (realized_sum + unrl_pnl).quantize(Decimal('0.01'))
-
-            latest_pulse = n_pulses[0] if n_pulses else None
-            latest_rsi = float(latest_pulse['rsi']) if latest_pulse else 50.0
-            latest_price = Decimal(str(latest_pulse['market_price'])) if latest_pulse else Decimal('0.00')
-            latest_sma = Decimal(str(latest_pulse['sma'])) if latest_pulse else Decimal('0.00')
-            sma_spread_pct = float(((latest_price - latest_sma) / latest_sma * Decimal('100.0')).quantize(Decimal('0.01'))) if latest_sma > 0 else 0.0
-
-            drip_bucket = Decimal(str(n.get('drip_bucket', '0.00')))
-            drip_target = Decimal(str(n.get('drip_target', '50.00')))
-            drip_remaining = max(Decimal('0.00'), drip_target - drip_bucket)
-            avg_win = (sum((Decimal(str(w['realized_pnl'])) for w in wins), Decimal('0.00')) / Decimal(str(len(wins)))).quantize(Decimal('0.01')) if wins else Decimal('0.05')
-            est_trades_to_spawn = int((drip_remaining / max(Decimal('0.01'), avg_win)).to_integral_value())
-
-            if net_node_pnl > Decimal('0.00') or (take_profits > hard_stops and unrl_pct >= Decimal('0.00')):
-                verdict = 'STRONG_PERFORMER'
-                strong_count += 1
-                diagnosis = f'Positive capture (+${net_node_pnl:.2f} net | {take_profits} TP vs {hard_stops} Stop). Trend spread {sma_spread_pct:+.2f}%.'
-            elif hard_stops > take_profits or net_node_pnl < Decimal('-0.02') or unrl_pct <= Decimal('-0.45'):
-                verdict = 'WEAK_LINK_DRAWDOWN'
-                weak_count += 1
-                diagnosis = f'Drawdown / Stop vulnerability (${net_node_pnl:.2f} net | {hard_stops} Hard Stops | Giveback alerts: {giveback_warnings}).'
-            elif giveback_warnings > 0:
-                verdict = 'WEAK_HOLD_GIVEBACK'
-                weak_count += 1
-                diagnosis = f'Peak profit giveback detected ({giveback_warnings} pulses). Tighten ratchet or lower RSI take-profit threshold.'
-            else:
-                verdict = 'NEUTRAL_INCUBATING'
-                diagnosis = f'Consolidating near SMA (Spread {sma_spread_pct:+.2f}% | RSI {latest_rsi:.1f}). Awaiting trend expansion.'
-
-            node_reports.append({
-                'node_id': nid,
-                'symbol': sym,
-                'division': n.get('division', ''),
-                'verdict': verdict,
-                'closed_trades': len(sells),
-                'wins': len(wins),
-                'losses': len(losses),
-                'take_profits': take_profits,
-                'hard_stops': hard_stops,
-                'giveback_warnings': giveback_warnings,
-                'realized_pnl': f'{realized_sum:.2f}',
-                'unrealized_pnl': f'{unrl_pnl:.2f}',
-                'unrealized_pct': f'{unrl_pct:.2f}%',
-                'net_pnl': f'{net_node_pnl:.2f}',
-                'sma_spread_pct': f'{sma_spread_pct:+.2f}%',
-                'latest_rsi': f'{latest_rsi:.1f}',
-                'drip_progress': f'${drip_bucket:.2f} / ${drip_target:.2f}',
-                'est_wins_to_spawn': est_trades_to_spawn,
-                'diagnosis': diagnosis,
-            })
-
-        return {
-            'strong_nodes_count': strong_count,
-            'weak_nodes_count': weak_count,
-            'total_evaluated': len(node_reports),
-            'node_reports': node_reports,
-        }
