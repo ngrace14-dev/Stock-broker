@@ -184,6 +184,8 @@ class ExecutionEngine:
         default_anchors = {
             'NVDA': Decimal('142.10'),
             'AMD': Decimal('156.40'),
+            'TSLA': Decimal('338.50'),
+            'TQQQ': Decimal('82.40'),
             'SPY': Decimal('589.40'),
             'QQQ': Decimal('504.80'),
             'GLD': Decimal('258.30'),

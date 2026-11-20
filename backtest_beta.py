@@ -121,6 +121,20 @@ STRATEGY_PROFILES = {
         'ratchet_drawdown_pct': 0.09,
         'hard_stop_pct': -0.45,
     },
+    'HYBRID_CORE_SATELLITE': {
+        'label': 'Hybrid Core-Satellite v4.3 (5x $100 Nodes: RSI 45-75, Spread -0.50% to +1.00%, +1.50% TP / -0.75% Stop)',
+        'min_entry_rsi': 45.0,
+        'max_entry_rsi': 75.0,
+        'min_sma_spread_pct': -0.50,
+        'max_sma_spread_pct': 1.00,
+        'cooldown_ticks': 2,
+        'tp_pct': 1.50,
+        'tp_min_dollars': Decimal('0.10'),
+        'tp_rsi': 70.0,
+        'ratchet_peak_pct': 0.50,
+        'ratchet_drawdown_pct': 0.15,
+        'hard_stop_pct': -0.75,
+    },
 }
 
 

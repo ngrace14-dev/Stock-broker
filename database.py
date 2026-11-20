@@ -719,13 +719,23 @@ class BrokerDatabase:
             )
             if reset_nodes:
                 conn.execute('DELETE FROM nodes')
-                per_node_cap = max(Decimal('6.25'), floor_cent(cash / Decimal('4')))
-                seed_nodes = [
-                    ('VELOCITY_BETA', 'HIGH_VELOCITY', 'NVDA', 'AMD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                    ('HARDWARE_TECH', 'SWING', 'SPY', 'QQQ', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                    ('PRECIOUS_METALS', 'MACRO_CYCLICAL', 'GLD', 'SLV', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                    ('DIVIDEND_INSURER', 'PERMANENT_ANCHOR', 'SCHD', 'VYM', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                ]
+                if cash >= Decimal('500.00'):
+                    per_node_cap = floor_cent(cash / Decimal('5'))
+                    seed_nodes = [
+                        ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'NVDA', 'SOXL', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                        ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'TSLA', 'COIN', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                        ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'AMD', 'SMH', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                        ('CORE_TREND_ANCHOR', 'SWING', 'TQQQ', 'QQQ', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                        ('CORE_TREND_ANCHOR', 'PERMANENT_ANCHOR', 'SPY', 'GLD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                    ]
+                else:
+                    per_node_cap = max(Decimal('6.25'), floor_cent(cash / Decimal('4')))
+                    seed_nodes = [
+                        ('VELOCITY_BETA', 'HIGH_VELOCITY', 'NVDA', 'AMD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                        ('HARDWARE_TECH', 'SWING', 'SPY', 'QQQ', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                        ('PRECIOUS_METALS', 'MACRO_CYCLICAL', 'GLD', 'SLV', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                        ('DIVIDEND_INSURER', 'PERMANENT_ANCHOR', 'SCHD', 'VYM', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                    ]
                 for div, cad, tick, btick, st, tier, start_cap, act_cap, cold, drip, target in seed_nodes:
                     conn.execute(
                         """

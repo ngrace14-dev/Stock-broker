@@ -299,8 +299,8 @@ class BrokerService:
         bt_engine = StrategyBacktestEngine(db_path=self.db.db_path)
         recorded_ticks = bt_engine.load_recorded_pulse_stream()
         recorded_comparison = [
-            bt_engine.simulate_profile(recorded_ticks, key, starting_cash=Decimal('25.00'), max_positions=1)
-            for key in ('MODERATE_MOMENTUM_V39', 'ASYMMETRIC_EDGE_V38', 'MOMENTUM_CONFIRM_V38', 'BASELINE_V37')
+            bt_engine.simulate_profile(recorded_ticks, key, starting_cash=Decimal('100.00'), max_positions=1)
+            for key in ('HYBRID_CORE_SATELLITE', 'MODERATE_MOMENTUM_V39', 'ASYMMETRIC_EDGE_V38', 'BASELINE_V37')
         ] if recorded_ticks else []
         return {
             'ok': True,

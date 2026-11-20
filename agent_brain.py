@@ -100,19 +100,19 @@ class AutonomousAgentBrain:
     def _compute_fractional_qty(self, node, market_price, concentrated=False):
         """
         Compute fractional share quantity sized honestly to available Ghost/Node capital.
-        When concentrated=True (Option 3 High-Conviction Mode), deploys up to 80% of available
-        Ghost cash into the highest-conviction entry to eliminate micro-lot cent rounding drag.
+        Automatically compounds each node's accumulated drip_bucket into its active trade size
+        so every winning trade immediately scales the next position (5x $100 Tandem Hybrid Mode).
         """
         settings = self.db.get_agent_settings()
-        avail_cash = Decimal(str(settings.get('ghost_cash', '25.00')))
-        node_cap = Decimal(str(node['active_capital']))
-        alloc_factor = Decimal('0.80') if int(node['tier']) == 0 else Decimal('0.40')
+        avail_cash = Decimal(str(settings.get('ghost_cash', '500.00')))
+        node_cap = Decimal(str(node['active_capital'])) + Decimal(str(node.get('drip_bucket', '0.00')))
+        alloc_factor = Decimal('0.90') if int(node['tier']) == 0 else Decimal('0.45')
         desired = (node_cap * alloc_factor).quantize(Decimal('0.01'))
-        cap_ratio = Decimal('0.80') if concentrated else Decimal('0.25')
-        max_per_trade = (avail_cash * cap_ratio).quantize(Decimal('0.01'))
+        cap_ratio = Decimal('0.80') if (concentrated and avail_cash <= Decimal('100.00')) else Decimal('0.25')
+        max_per_trade = max(desired, (avail_cash * cap_ratio).quantize(Decimal('0.01')))
         target_notional = min(desired, max_per_trade, avail_cash)
         if concentrated and avail_cash <= Decimal('100.00'):
-            target_notional = min(max_per_trade, avail_cash)
+            target_notional = min((avail_cash * Decimal('0.80')).quantize(Decimal('0.01')), avail_cash)
         if target_notional < Decimal('1.00') and avail_cash >= Decimal('1.00'):
             target_notional = min(Decimal('20.00') if concentrated else Decimal('5.00'), avail_cash)
         if target_notional <= Decimal('0.05') or market_price <= Decimal('0.00'):
