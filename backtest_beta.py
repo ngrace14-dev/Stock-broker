@@ -1,5 +1,15 @@
+import collections
+import json
 import math
-from datetime import datetime, timedelta
+import sqlite3
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from pathlib import Path
+
+from config import get_broker_config
+
 
 class BacktestBetaNode:
     def __init__(self, tier, active_capital):
@@ -14,30 +24,414 @@ class BacktestBetaNode:
         return self.active_capital * (0.80 if self.tier == 0 else 0.40)
 
     def execute_trade(self, price, side='buy'):
-        # Modeled friction
         friction = 0.02
         if side == 'buy':
             return price + friction
         return price - friction
 
     def simulate_tier_0_graduation(self):
-        # Graduation Logic: Hit $50 -> Parent rebate + Tier 1
         if self.tier == 0 and self.active_capital >= 50.0:
             print("Graduating Tier 0 to Tier 1")
             return True
         return False
 
+
+STRATEGY_PROFILES = {
+    'BASELINE_V37': {
+        'label': 'Baseline v3.7 (Current Live Engine)',
+        'min_entry_rsi': 0.0,
+        'max_entry_rsi': 78.0,
+        'min_sma_spread_pct': -99.0,
+        'max_sma_spread_pct': 99.0,
+        'cooldown_ticks': 0,
+        'tp_pct': 0.35,
+        'tp_min_dollars': Decimal('0.02'),
+        'tp_rsi': 62.0,
+        'ratchet_peak_pct': 0.25,
+        'ratchet_drawdown_pct': 0.12,
+        'hard_stop_pct': -0.85,
+    },
+    'DISCIPLINED_DIP_V38': {
+        'label': 'Disciplined Dip v3.8 (Anti-Falling-Knife + Cooldown)',
+        'min_entry_rsi': 22.0,
+        'max_entry_rsi': 65.0,
+        'min_sma_spread_pct': -0.35,
+        'max_sma_spread_pct': 0.30,
+        'cooldown_ticks': 2,
+        'tp_pct': 0.35,
+        'tp_min_dollars': Decimal('0.02'),
+        'tp_rsi': 60.0,
+        'ratchet_peak_pct': 0.22,
+        'ratchet_drawdown_pct': 0.10,
+        'hard_stop_pct': -0.75,
+    },
+    'TIGHT_RATCHET_V38': {
+        'label': 'Tight Ratchet v3.8 (Fast Profit Lock + Tight Stop)',
+        'min_entry_rsi': 25.0,
+        'max_entry_rsi': 68.0,
+        'min_sma_spread_pct': -0.25,
+        'max_sma_spread_pct': 0.25,
+        'cooldown_ticks': 2,
+        'tp_pct': 0.25,
+        'tp_min_dollars': Decimal('0.01'),
+        'tp_rsi': 58.0,
+        'ratchet_peak_pct': 0.18,
+        'ratchet_drawdown_pct': 0.08,
+        'hard_stop_pct': -0.50,
+    },
+    'PATIENT_TREND_V38': {
+        'label': 'Patient Trend v3.8 (Trend Filter + Wider -1.25% Stop)',
+        'min_entry_rsi': 25.0,
+        'max_entry_rsi': 70.0,
+        'min_sma_spread_pct': -0.25,
+        'max_sma_spread_pct': 0.35,
+        'cooldown_ticks': 3,
+        'tp_pct': 0.45,
+        'tp_min_dollars': Decimal('0.02'),
+        'tp_rsi': 64.0,
+        'ratchet_peak_pct': 0.30,
+        'ratchet_drawdown_pct': 0.12,
+        'hard_stop_pct': -1.25,
+    },
+    'OVERSOLD_REVERSION_V38': {
+        'label': 'Oversold Mean-Reversion v3.8 (Buy Pullbacks <=45 RSI, Wide Stop)',
+        'min_entry_rsi': 5.0,
+        'max_entry_rsi': 45.0,
+        'min_sma_spread_pct': -2.50,
+        'max_sma_spread_pct': -0.02,
+        'cooldown_ticks': 1,
+        'tp_pct': 0.45,
+        'tp_min_dollars': Decimal('0.02'),
+        'tp_rsi': 60.0,
+        'ratchet_peak_pct': 0.25,
+        'ratchet_drawdown_pct': 0.10,
+        'hard_stop_pct': -1.80,
+    },
+    'ASYMMETRIC_EDGE_V38': {
+        'label': 'Asymmetric Edge v3.8 (Buy Below SMA, +0.55% TP / Ratchet Save)',
+        'min_entry_rsi': 10.0,
+        'max_entry_rsi': 52.0,
+        'min_sma_spread_pct': -3.00,
+        'max_sma_spread_pct': 0.05,
+        'cooldown_ticks': 1,
+        'tp_pct': 0.55,
+        'tp_min_dollars': Decimal('0.02'),
+        'tp_rsi': 62.0,
+        'ratchet_peak_pct': 0.25,
+        'ratchet_drawdown_pct': 0.10,
+        'hard_stop_pct': -2.20,
+    },
+    'MOMENTUM_CONFIRM_V38': {
+        'label': 'Momentum Confirmation v3.8 (Only Buy Uptrends Above SMA, Tight -0.35% Stop)',
+        'min_entry_rsi': 52.0,
+        'max_entry_rsi': 72.0,
+        'min_sma_spread_pct': 0.03,
+        'max_sma_spread_pct': 0.40,
+        'cooldown_ticks': 3,
+        'tp_pct': 0.45,
+        'tp_min_dollars': Decimal('0.02'),
+        'tp_rsi': 65.0,
+        'ratchet_peak_pct': 0.22,
+        'ratchet_drawdown_pct': 0.09,
+        'hard_stop_pct': -0.35,
+    },
+}
+
+
+class StrategyBacktestEngine:
+    def __init__(self, db_path=None):
+        self.db_path = Path(db_path) if db_path else (Path(__file__).resolve().parent / 'broker_v37.db')
+
+    def load_recorded_pulse_stream(self, limit=5000):
+        if not self.db_path.exists():
+            return []
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT pulse_number, timestamp_utc, node_id, symbol, market_price, price_source
+                FROM market_pulse_audit
+                ORDER BY audit_id ASC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+            return [
+                {
+                    'pulse': int(r['pulse_number']),
+                    'timestamp': r['timestamp_utc'],
+                    'symbol': str(r['symbol']).upper(),
+                    'price': Decimal(str(r['market_price'])).quantize(Decimal('0.01')),
+                    'source': r['price_source'],
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+    def fetch_alpaca_historical_stream(self, symbols=('NVDA', 'SPY', 'GLD', 'SCHD'), timeframe='5Min', limit_per_symbol=250):
+        cfg = get_broker_config()
+        if not cfg.get('has_alpaca_keys'):
+            return []
+        sym_list = ','.join(s.strip().upper() for s in symbols)
+        start_dt = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        url = (
+            f"https://data.alpaca.markets/v2/stocks/bars?"
+            f"symbols={urllib.parse.quote(sym_list)}&timeframe={timeframe}&start={start_dt}&limit=1000&feed=iex"
+        )
+        headers = {
+            'APCA-API-KEY-ID': cfg['alpaca_api_key'],
+            'APCA-API-SECRET-KEY': cfg['alpaca_secret_key'],
+            'Accept': 'application/json',
+            'User-Agent': 'StockBroker-v3.7-Backtester/1.0',
+        }
+        req = urllib.request.Request(url=url, headers=headers, method='GET')
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                payload = json.loads(resp.read().decode('utf-8'))
+                bars_by_sym = payload.get('bars', {})
+                events = []
+                for sym, bars in bars_by_sym.items():
+                    for b in bars[-limit_per_symbol:]:
+                        events.append({
+                            'timestamp': b.get('t', ''),
+                            'symbol': sym.upper(),
+                            'price': Decimal(str(b.get('c', '0'))).quantize(Decimal('0.01')),
+                            'source': f'ALPACA_HIST_{timeframe}',
+                        })
+                events.sort(key=lambda x: (x['timestamp'], x['symbol']))
+                for idx, ev in enumerate(events, 1):
+                    ev['pulse'] = idx
+                return events
+        except Exception:
+            return []
+
+
+    @staticmethod
+    def _compute_indicators(history_deque, current_price):
+        p = float(current_price)
+        history_deque.append(p)
+        series = list(history_deque)
+        sma = sum(series) / len(series) if series else p
+        if len(series) < 3:
+            rsi = 50.0
+        else:
+            gains = []
+            losses = []
+            for i in range(1, len(series)):
+                delta = series[i] - series[i - 1]
+                if delta > 0:
+                    gains.append(delta)
+                    losses.append(0.0)
+                else:
+                    gains.append(0.0)
+                    losses.append(abs(delta))
+            avg_gain = (sum(gains) / len(gains)) if gains else 0.0
+            avg_loss = (sum(losses) / len(losses)) if losses else 0.0
+            if avg_loss == 0.0 and avg_gain == 0.0:
+                rsi = 50.0
+            elif avg_loss == 0.0:
+                rsi = 75.0
+            else:
+                rs = avg_gain / avg_loss
+                rsi = 100.0 - (100.0 / (1.0 + rs))
+        sma_spread_pct = ((p - sma) / sma * 100.0) if sma > 0 else 0.0
+        return {
+            'price': round(p, 2),
+            'sma': round(sma, 2),
+            'sma_spread_pct': round(sma_spread_pct, 2),
+            'rsi': round(rsi, 1),
+            'samples': len(series),
+        }
+
+    def simulate_profile(self, ticks, profile_key='BASELINE_V37', starting_cash=Decimal('25.00')):
+        profile = STRATEGY_PROFILES[profile_key]
+        cash = Decimal(str(starting_cash)).quantize(Decimal('0.01'))
+        history = collections.defaultdict(lambda: collections.deque(maxlen=30))
+        positions = {}
+        cooldowns = collections.defaultdict(int)
+        last_prices = {}
+
+        closed_trades = []
+        wins = 0
+        losses = 0
+        take_profits = 0
+        ratchet_saves = 0
+        hard_stops = 0
+        filtered_entries = 0
+
+        for tick in ticks:
+            sym = tick['symbol']
+            cur_p = tick['price']
+            if cur_p <= Decimal('0.00'):
+                continue
+            last_prices[sym] = cur_p
+            ind = self._compute_indicators(history[sym], cur_p)
+            rsi = ind['rsi']
+            spread = ind['sma_spread_pct']
+
+            if sym not in positions:
+                if cooldowns[sym] > 0:
+                    cooldowns[sym] -= 1
+                    filtered_entries += 1
+                    continue
+                if (
+                    rsi < profile['min_entry_rsi']
+                    or rsi > profile['max_entry_rsi']
+                    or spread < profile['min_sma_spread_pct']
+                    or spread > profile['max_sma_spread_pct']
+                ):
+                    filtered_entries += 1
+                    continue
+
+                target_notional = min(Decimal('5.00'), (cash * Decimal('0.25')).quantize(Decimal('0.01')), cash)
+                if target_notional < Decimal('1.00') and cash >= Decimal('2.50'):
+                    target_notional = min(Decimal('2.50'), cash)
+                if target_notional <= Decimal('0.50'):
+                    continue
+                qty = max(Decimal('0.0001'), (target_notional / cur_p).quantize(Decimal('0.0001')))
+                notional = (qty * cur_p).quantize(Decimal('0.01'))
+                if notional > cash or notional <= Decimal('0.00'):
+                    continue
+
+                cash -= notional
+                positions[sym] = {'qty': qty, 'entry_price': cur_p, 'notional': notional, 'hwm': cur_p}
+            else:
+                pos = positions[sym]
+                qty = pos['qty']
+                entry_p = pos['entry_price']
+                if cur_p > pos['hwm']:
+                    pos['hwm'] = cur_p
+                hwm = pos['hwm']
+
+                pnl_dollars = ((cur_p - entry_p) * qty).quantize(Decimal('0.01'))
+                pnl_pct = float(((cur_p - entry_p) / entry_p * Decimal('100.0')).quantize(Decimal('0.01'))) if entry_p > 0 else 0.0
+                peak_pct = float(((hwm - entry_p) / entry_p * Decimal('100.0')).quantize(Decimal('0.01'))) if entry_p > 0 else 0.0
+                drawdown_from_hwm_pct = float(((hwm - cur_p) / hwm * Decimal('100.0')).quantize(Decimal('0.01'))) if hwm > 0 else 0.0
+
+                exit_reason = None
+                if pnl_pct >= profile['tp_pct'] or (pnl_dollars >= profile['tp_min_dollars'] and rsi >= profile['tp_rsi']):
+                    exit_reason = 'SELL_TAKE_PROFIT'
+                    take_profits += 1
+                elif peak_pct >= profile['ratchet_peak_pct'] and drawdown_from_hwm_pct >= profile['ratchet_drawdown_pct'] and pnl_dollars > Decimal('0.00'):
+                    exit_reason = 'SELL_TRAILING_RATCHET'
+                    ratchet_saves += 1
+                elif pnl_pct <= profile['hard_stop_pct']:
+                    exit_reason = 'SELL_HARD_STOP'
+                    hard_stops += 1
+
+                if exit_reason:
+                    proceeds = (qty * cur_p).quantize(Decimal('0.01'))
+                    realized = (proceeds - pos['notional']).quantize(Decimal('0.01'))
+                    cash += proceeds
+                    if realized > Decimal('0.00'):
+                        wins += 1
+                    elif realized < Decimal('0.00'):
+                        losses += 1
+                    closed_trades.append({
+                        'symbol': sym,
+                        'entry_price': f'{entry_p:.2f}',
+                        'exit_price': f'{cur_p:.2f}',
+                        'realized_pnl': f'{realized:.2f}',
+                        'pnl_pct': f'{pnl_pct:+.2f}%',
+                        'reason': exit_reason,
+                    })
+                    del positions[sym]
+                    cooldowns[sym] = int(profile['cooldown_ticks'])
+
+        open_value = Decimal('0.00')
+        unrealized_pnl = Decimal('0.00')
+        for sym, pos in positions.items():
+            mark_p = last_prices.get(sym, pos['entry_price'])
+            mkt_val = (pos['qty'] * mark_p).quantize(Decimal('0.01'))
+            open_value += mkt_val
+            unrealized_pnl += (mkt_val - pos['notional']).quantize(Decimal('0.01'))
+
+        realized_pnl = sum((Decimal(t['realized_pnl']) for t in closed_trades), Decimal('0.00'))
+        total_equity = (cash + open_value).quantize(Decimal('0.01'))
+        net_pnl = (total_equity - starting_cash).quantize(Decimal('0.01'))
+        return_pct = float((net_pnl / starting_cash * Decimal('100.0')).quantize(Decimal('0.02')))
+        total_decided = wins + losses
+        win_rate = round((wins / total_decided * 100.0), 1) if total_decided > 0 else 0.0
+
+        return {
+            'profile_key': profile_key,
+            'label': profile['label'],
+            'ticks_processed': len(ticks),
+            'starting_cash': f'{starting_cash:.2f}',
+            'ending_equity': f'{total_equity:.2f}',
+            'realized_pnl': f'{realized_pnl:+.2f}',
+            'unrealized_pnl': f'{unrealized_pnl:+.2f}',
+            'net_pnl': f'{net_pnl:+.2f}',
+            'return_pct': f'{return_pct:+.2f}%',
+            'closed_trades': len(closed_trades),
+            'wins': wins,
+            'losses': losses,
+            'win_rate': f'{win_rate:.1f}%',
+            'take_profits': take_profits,
+            'ratchet_saves': ratchet_saves,
+            'hard_stops': hard_stops,
+            'filtered_bad_entries': filtered_entries,
+            'recent_trades': closed_trades[-8:],
+        }
+
+    def run_comparative_suite(self, starting_cash=25.00):
+        recorded_ticks = self.load_recorded_pulse_stream()
+        alpaca_ticks = self.fetch_alpaca_historical_stream()
+        start_dec = Decimal(str(starting_cash)).quantize(Decimal('0.01'))
+
+        recorded_results = [
+            self.simulate_profile(recorded_ticks, key, starting_cash=start_dec)
+            for key in STRATEGY_PROFILES
+        ]
+        alpaca_results = [
+            self.simulate_profile(alpaca_ticks, key, starting_cash=start_dec)
+            for key in STRATEGY_PROFILES
+        ] if alpaca_ticks else []
+
+        best_recorded = max(recorded_results, key=lambda r: Decimal(r['net_pnl'])) if recorded_results else None
+        return {
+            'recorded_pulse_count': len(recorded_ticks),
+            'alpaca_bar_count': len(alpaca_ticks),
+            'recorded_comparison': recorded_results,
+            'alpaca_7d_comparison': alpaca_results,
+            'recommended_profile': best_recorded['profile_key'] if best_recorded else 'BASELINE_V37',
+            'recommended_label': best_recorded['label'] if best_recorded else 'Baseline v3.7',
+        }
+
+
 # Verification Test
 def test_backtest_math():
     node = BacktestBetaNode(tier=0, active_capital=10.0)
     assert node.get_position_size() == 8.0, f"Expected 8.0, got {node.get_position_size()}"
-    
-    # Simulate Trade Outcome
+
     fill_price = 100.0
     entry = node.execute_trade(fill_price, 'buy')
     assert entry == 100.02, "Friction model failed"
-    
+
     print("Backtester math verification passed.")
+
 
 if __name__ == "__main__":
     test_backtest_math()
+    engine = StrategyBacktestEngine()
+    suite = engine.run_comparative_suite(starting_cash=25.00)
+    print(f"\n=== BACKTEST SUITE: {suite['recorded_pulse_count']} Recorded Live Pulses | {suite['alpaca_bar_count']} Alpaca 7-Day 5Min Bars ===")
+    print("\n[A] REPLAY AGAINST RECORDED LIVE PULSES (broker_v37.db):")
+    for r in suite['recorded_comparison']:
+        print(
+            f"  * {r['profile_key']:<20} | Equity: ${r['ending_equity']} (Net: ${r['net_pnl']} / {r['return_pct']}) "
+            f"| Trades: {r['closed_trades']} (W:{r['wins']} / L:{r['losses']} = {r['win_rate']}) "
+            f"| TP:{r['take_profits']} Ratchet:{r['ratchet_saves']} Stops:{r['hard_stops']} | Filtered:{r['filtered_bad_entries']}"
+        )
+    if suite['alpaca_7d_comparison']:
+        print("\n[B] REPLAY AGAINST 7-DAY ALPACA HISTORICAL 5-MIN BARS (NVDA, SPY, GLD, SCHD):")
+        for r in suite['alpaca_7d_comparison']:
+            print(
+                f"  * {r['profile_key']:<20} | Equity: ${r['ending_equity']} (Net: ${r['net_pnl']} / {r['return_pct']}) "
+                f"| Trades: {r['closed_trades']} (W:{r['wins']} / L:{r['losses']} = {r['win_rate']}) "
+                f"| TP:{r['take_profits']} Ratchet:{r['ratchet_saves']} Stops:{r['hard_stops']} | Filtered:{r['filtered_bad_entries']}"
+            )
+    print(f"\nRecommended Profile: {suite['recommended_profile']} ({suite['recommended_label']})")
+

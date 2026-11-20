@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from agent_brain import AutonomousAgentBrain
-from backtest_beta import BacktestBetaNode
+from backtest_beta import BacktestBetaNode, StrategyBacktestEngine
 from config import get_broker_config
 from daemon import AutoBrokerDaemon
 from database import BrokerDatabase
@@ -296,6 +296,12 @@ class BrokerService:
         buy_fill = node.execute_trade(float(entry_price), 'buy')
         sell_fill = node.execute_trade(float(entry_price) * 1.03, 'sell')
         graduated = node.simulate_tier_0_graduation()
+        bt_engine = StrategyBacktestEngine(db_path=self.db.db_path)
+        recorded_ticks = bt_engine.load_recorded_pulse_stream()
+        recorded_comparison = [
+            bt_engine.simulate_profile(recorded_ticks, key, starting_cash=Decimal('25.00'))
+            for key in ('BASELINE_V37', 'OVERSOLD_REVERSION_V38', 'MOMENTUM_CONFIRM_V38', 'ASYMMETRIC_EDGE_V38')
+        ] if recorded_ticks else []
         return {
             'ok': True,
             'tier': int(tier),
@@ -305,6 +311,8 @@ class BrokerService:
             'modeled_buy_fill': round(buy_fill, 2),
             'modeled_target_exit': round(sell_fill, 2),
             'tier_0_graduated': graduated,
+            'recorded_pulse_count': len(recorded_ticks),
+            'strategy_comparison': recorded_comparison,
         }
 
 

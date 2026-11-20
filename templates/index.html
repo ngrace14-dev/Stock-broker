@@ -1656,9 +1656,18 @@
       const entry_price = parseFloat(document.getElementById('orderPrice').value || '100');
       const res = await apiPost('/api/backtest', { tier, active_capital, entry_price });
       if (res.ok) {
-        document.getElementById('btOutput').innerHTML =
+        let html =
           `Pos Size: <strong>$${res.recommended_position_size}</strong> | Cold Storage: <strong>$${res.cold_storage}</strong> | ` +
           `Buy w/ Friction: <strong>$${res.modeled_buy_fill}</strong> | Tier-0 Graduation Ready: <strong>${res.tier_0_graduated ? 'YES' : 'NO'}</strong>`;
+        if (res.strategy_comparison && res.strategy_comparison.length) {
+          html += `<div style="margin-top:8px; border-top:1px solid var(--border); padding-top:6px;">` +
+            `<strong>Live Pulse Replay (${res.recorded_pulse_count} Ticks, $25 Seed):</strong><br/>` +
+            res.strategy_comparison.map(r =>
+              `<span style="display:inline-block; margin-top:3px;">• <strong>${r.profile_key}</strong>: Equity <strong>$${r.ending_equity}</strong> (${r.net_pnl} / ${r.return_pct}) | Trades: ${r.closed_trades} (Win: ${r.win_rate}) | Stops: ${r.hard_stops}</span>`
+            ).join('<br/>') +
+            `</div>`;
+        }
+        document.getElementById('btOutput').innerHTML = html;
       }
     }
 
