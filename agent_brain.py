@@ -45,6 +45,9 @@ class AutonomousAgentBrain:
         """Execute one autonomous observation, mark-to-market, and trade decision cycle."""
         self.pulse_count += 1
         self.db.record_heartbeat('AUTONOMOUS_AGENT_BRAIN', os.getpid(), 'PULSING')
+        nitro_res = self.db.consume_pending_nitro_injection()
+        if Decimal(str(nitro_res.get('consumed', '0.00'))) > Decimal('0.00'):
+            self._log_reasoning(0, 'NITRO_VAULT', 'NITRO_SUPERCHARGE', nitro_res['message'])
         settings = self.db.get_agent_settings()
         fund_gate_open = settings['fund_gate_enabled']
         exec_mode = settings['execution_mode']

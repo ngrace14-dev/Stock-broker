@@ -477,6 +477,13 @@ def handle_api_post(path, payload):
             res['deployed'] = deploy_res.get('deployed', [])
             res['message'] += f" Deployed {len(res['deployed'])} initial Ghost position(s) at live market quotes."
         return res
+    if path == '/api/nitro-inject':
+        res = broker_service.db.inject_nitro_funds(
+            amount=payload.get('amount', '100.00'),
+            queue_for_pulse=bool(payload.get('queue_for_pulse', False)),
+        )
+        broker_service.execution._record_event('NITRO_PROTOCOL', res.get('message', 'Nitro injection executed'), 'INFO')
+        return res
     return None
 
 

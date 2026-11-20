@@ -427,6 +427,149 @@ class StrategyBacktestEngine:
             'recommended_label': best_recorded['label'] if best_recorded else 'Moderate Momentum Bridge v3.9',
         }
 
+    def simulate_nitro_fleet(
+        self,
+        ticks,
+        profile_key='HYBRID_CORE_SATELLITE',
+        initial_node_seed=Decimal('100.00'),
+        node_count=5,
+        monthly_nitro_per_fleet=Decimal('100.00'),
+        allowed_symbols=('NVDA', 'TSLA', 'AMD', 'TQQQ'),
+    ):
+        profile = STRATEGY_PROFILES[profile_key]
+        init_per_node = Decimal(str(initial_node_seed)).quantize(Decimal('0.01'))
+        monthly_add_total = Decimal(str(monthly_nitro_per_fleet)).quantize(Decimal('0.01'))
+        monthly_add_per_node = (monthly_add_total / Decimal(str(node_count))).quantize(Decimal('0.01'))
+
+        allowed_set = {s.upper() for s in allowed_symbols}
+        filtered_ticks = [t for t in ticks if t['symbol'] in allowed_set]
+
+        cash = init_per_node
+        history = collections.defaultdict(lambda: collections.deque(maxlen=30))
+        pos = None
+        cooldowns = collections.defaultdict(int)
+        last_prices = {}
+        active_ym = None
+        nitro_events = 0
+        wins = 0
+        losses = 0
+        closed_trades = 0
+
+        for tick in filtered_ticks:
+            sym = tick['symbol']
+            cur_p = tick['price']
+            if cur_p <= Decimal('0.00'):
+                continue
+            last_prices[sym] = cur_p
+
+            ym = str(tick.get('timestamp', ''))[:7]
+            if ym and ym != active_ym:
+                if active_ym is not None:
+                    nitro_events += 1
+                    cash = (cash + monthly_add_per_node).quantize(Decimal('0.01'))
+                    if pos is not None and pos['symbol'] in last_prices:
+                        p_now = last_prices[pos['symbol']]
+                        if p_now >= pos['entry_price']:
+                            add_qty = (monthly_add_per_node / p_now).quantize(Decimal('0.0001'))
+                            add_notional = (add_qty * p_now).quantize(Decimal('0.01'))
+                            if add_qty > Decimal('0.0000') and add_notional <= cash:
+                                cash -= add_notional
+                                pos['qty'] += add_qty
+                                pos['notional'] += add_notional
+                                pos['entry_price'] = (pos['notional'] / pos['qty']).quantize(Decimal('0.01'))
+                active_ym = ym
+
+            ind = self._compute_indicators(history[sym], cur_p)
+            rsi = ind['rsi']
+            spread = ind['sma_spread_pct']
+
+            if pos is None:
+                if cooldowns[sym] > 0:
+                    cooldowns[sym] -= 1
+                    continue
+                if (
+                    rsi < profile['min_entry_rsi']
+                    or rsi > profile['max_entry_rsi']
+                    or spread < profile['min_sma_spread_pct']
+                    or spread > profile['max_sma_spread_pct']
+                ):
+                    continue
+                target_notional = cash
+                if target_notional <= Decimal('0.50'):
+                    continue
+                qty = max(Decimal('0.0001'), (target_notional / cur_p).quantize(Decimal('0.0001')))
+                notional = (qty * cur_p).quantize(Decimal('0.01'))
+                if notional > cash or notional <= Decimal('0.00'):
+                    continue
+                cash -= notional
+                pos = {'symbol': sym, 'qty': qty, 'entry_price': cur_p, 'notional': notional, 'hwm': cur_p}
+            elif pos['symbol'] == sym:
+                qty = pos['qty']
+                entry_p = pos['entry_price']
+                if cur_p > pos['hwm']:
+                    pos['hwm'] = cur_p
+                hwm = pos['hwm']
+
+                pnl_dollars = ((cur_p - entry_p) * qty).quantize(Decimal('0.01'))
+                pnl_pct = float(((cur_p - entry_p) / entry_p * Decimal('100.0')).quantize(Decimal('0.01'))) if entry_p > 0 else 0.0
+                peak_pct = float(((hwm - entry_p) / entry_p * Decimal('100.0')).quantize(Decimal('0.01'))) if entry_p > 0 else 0.0
+                drawdown_from_hwm_pct = float(((hwm - cur_p) / hwm * Decimal('100.0')).quantize(Decimal('0.01'))) if hwm > 0 else 0.0
+
+                exit_reason = None
+                if pnl_pct >= profile['tp_pct'] or (pnl_dollars >= profile['tp_min_dollars'] and rsi >= profile['tp_rsi']):
+                    exit_reason = 'SELL_TAKE_PROFIT'
+                elif peak_pct >= profile['ratchet_peak_pct'] and drawdown_from_hwm_pct >= profile['ratchet_drawdown_pct'] and pnl_dollars > Decimal('0.00'):
+                    exit_reason = 'SELL_TRAILING_RATCHET'
+                elif pnl_pct <= profile['hard_stop_pct']:
+                    exit_reason = 'SELL_HARD_STOP'
+
+                if exit_reason:
+                    proceeds = (qty * cur_p).quantize(Decimal('0.01'))
+                    realized = (proceeds - pos['notional']).quantize(Decimal('0.01'))
+                    cash += proceeds
+                    closed_trades += 1
+                    if realized > Decimal('0.00'):
+                        wins += 1
+                    elif realized < Decimal('0.00'):
+                        losses += 1
+                    pos = None
+                    cooldowns[sym] = int(profile['cooldown_ticks'])
+
+        single_node_ending = cash
+        if pos is not None:
+            mark_p = last_prices.get(pos['symbol'], pos['entry_price'])
+            single_node_ending += (pos['qty'] * mark_p).quantize(Decimal('0.01'))
+
+        ending_equity = (single_node_ending * Decimal(str(node_count))).quantize(Decimal('0.01'))
+        initial_total = (init_per_node * Decimal(str(node_count))).quantize(Decimal('0.01'))
+        total_contributed = (initial_total + (monthly_add_total * Decimal(str(nitro_events)))).quantize(Decimal('0.01'))
+        net_profit = (ending_equity - total_contributed).quantize(Decimal('0.01'))
+        roi_on_total_contributed = float((net_profit / total_contributed * Decimal('100.0')).quantize(Decimal('0.02'))) if total_contributed > 0 else 0.0
+        roi_on_initial_seed = float((net_profit / initial_total * Decimal('100.0')).quantize(Decimal('0.02'))) if initial_total > 0 else 0.0
+        avg_deployed_capital = (initial_total + (total_contributed - initial_total) / Decimal('2.0')).quantize(Decimal('0.01'))
+        time_weighted_roi = float((net_profit / avg_deployed_capital * Decimal('100.0')).quantize(Decimal('0.02'))) if avg_deployed_capital > 0 else 0.0
+        win_rate = round((wins / max(1, wins + losses)) * 100.0, 1)
+
+        return {
+            'profile_key': profile_key,
+            'node_count': node_count,
+            'initial_seed_total': f'{initial_total:.2f}',
+            'nitro_injections_count': nitro_events,
+            'monthly_nitro_amount': f'{monthly_add_total:.2f}',
+            'total_capital_contributed': f'{total_contributed:.2f}',
+            'average_deployed_capital': f'{avg_deployed_capital:.2f}',
+            'ending_equity': f'{ending_equity:.2f}',
+            'net_profit': f'{net_profit:+.2f}',
+            'return_on_initial_seed_pct': f'{roi_on_initial_seed:+.2f}%',
+            'time_weighted_return_pct': f'{time_weighted_roi:+.2f}%',
+            'return_on_total_contributed_pct': f'{roi_on_total_contributed:+.2f}%',
+            'closed_trades': closed_trades,
+            'wins': wins,
+            'losses': losses,
+            'win_rate': f'{win_rate:.1f}%',
+        }
+
+
 
 # Verification Test
 def test_backtest_math():
@@ -467,6 +610,29 @@ if __name__ == "__main__":
     if bars_10m:
         _print_table("[5] 10-MONTH (300-DAY) ALPACA HISTORICAL BARS - 4-NODE SPLIT ($6.25/trade)", bars_10m, max_pos=4)
         _print_table("[6] 10-MONTH (300-DAY) ALPACA HISTORICAL BARS - OPTION 3: 1-NODE CONCENTRATED ($25/trade)", bars_10m, max_pos=1)
+
+    bars_12m_nitro = engine.fetch_alpaca_historical_stream(
+        symbols=('NVDA', 'TSLA', 'AMD', 'TQQQ', 'SPY'),
+        timeframe='1Day',
+        days=365,
+        max_pages=2,
+    )
+    if bars_12m_nitro:
+        print("\n=== [7] 12-MONTH (365-DAY) NITRO FUND PROTOCOL AUDIT (5 TANDEM NODES + $100/MO NITRO SUPERCHARGE) ===")
+        for seed_per_node in (Decimal('20.00'), Decimal('100.00')):
+            nr = engine.simulate_nitro_fleet(
+                bars_12m_nitro,
+                profile_key='HYBRID_CORE_SATELLITE',
+                initial_node_seed=seed_per_node,
+                node_count=5,
+                monthly_nitro_per_fleet=Decimal('100.00'),
+            )
+            print(
+                f"  * 5x ${seed_per_node}/Node (${nr['initial_seed_total']} Seed + {nr['nitro_injections_count']}x ${nr['monthly_nitro_amount']} Nitro = ${nr['total_capital_contributed']} Contributed)\n"
+                f"    -> Ending Equity: ${nr['ending_equity']} | Net Profit: ${nr['net_profit']} "
+                f"| Time-Weighted Return: {nr['time_weighted_return_pct']} (Return on Initial Seed: {nr['return_on_initial_seed_pct']})\n"
+                f"    -> Trades: {nr['closed_trades']} (W:{nr['wins']} / L:{nr['losses']} = {nr['win_rate']})"
+            )
 
 
 

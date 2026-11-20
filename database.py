@@ -183,7 +183,17 @@ class BrokerDatabase:
                 """
             )
             conn.commit()
+        self._ensure_nitro_columns()
         self._seed_defaults()
+
+    def _ensure_nitro_columns(self):
+        with self._lock, self._connect() as conn:
+            cols = {r['name'] for r in conn.execute('PRAGMA table_info(global_ledger)').fetchall()}
+            if 'pending_nitro_injection' not in cols:
+                conn.execute("ALTER TABLE global_ledger ADD COLUMN pending_nitro_injection TEXT NOT NULL DEFAULT '0.00'")
+            if 'total_nitro_injected' not in cols:
+                conn.execute("ALTER TABLE global_ledger ADD COLUMN total_nitro_injected TEXT NOT NULL DEFAULT '0.00'")
+            conn.commit()
 
     def _seed_defaults(self):
         now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
@@ -753,6 +763,89 @@ class BrokerDatabase:
             'starting_cash': f'{cash:.2f}',
             'message': f'Ghost Portfolio cleanly reset to ${cash:.2f} starting capital (0 trades, 0 open positions, pure market-price tracking).',
         }
+
+    def inject_nitro_funds(self, amount='100.00', queue_for_pulse=False):
+        """
+        Nitro Fund Protocol:
+        Queues or immediately deploys a monthly/ad-hoc capital injection (e.g. $100.00)
+        directly into SATELLITE_ALPHA nodes' active_capital so 100% of Nitro funds are
+        immediately leveraged on the next high-conviction signal instead of sitting as dead cash.
+        """
+        amt = Decimal(str(amount)).quantize(Decimal('0.01'))
+        if amt <= Decimal('0.00'):
+            raise ValueError('Nitro injection amount must be greater than $0.00.')
+        with self._lock, self._connect() as conn:
+            row = conn.execute('SELECT pending_nitro_injection FROM global_ledger WHERE id = 1').fetchone()
+            cur_pending = Decimal(str(row['pending_nitro_injection'])) if row and row['pending_nitro_injection'] else Decimal('0.00')
+            new_pending = (cur_pending + amt).quantize(Decimal('0.01'))
+            conn.execute(
+                'UPDATE global_ledger SET pending_nitro_injection = ? WHERE id = 1',
+                (f'{new_pending:.2f}',),
+            )
+            conn.commit()
+        if not queue_for_pulse:
+            return self.consume_pending_nitro_injection()
+        return {
+            'ok': True,
+            'queued_nitro': f'{new_pending:.2f}',
+            'message': f'Queued +${amt:.2f} Nitro Fund injection for next Agent Brain pulse.',
+        }
+
+    def consume_pending_nitro_injection(self):
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                'SELECT pending_nitro_injection, total_nitro_injected FROM global_ledger WHERE id = 1'
+            ).fetchone()
+            if not row:
+                return {'ok': True, 'consumed': '0.00', 'nodes_boosted': 0}
+            pending = Decimal(str(row['pending_nitro_injection'] or '0.00')).quantize(Decimal('0.01'))
+            if pending <= Decimal('0.00'):
+                return {'ok': True, 'consumed': '0.00', 'nodes_boosted': 0}
+
+            total_injected = (Decimal(str(row['total_nitro_injected'] or '0.00')) + pending).quantize(Decimal('0.01'))
+            conn.execute(
+                "UPDATE global_ledger SET pending_nitro_injection = '0.00', total_nitro_injected = ? WHERE id = 1",
+                (f'{total_injected:.2f}',),
+            )
+
+            ag = conn.execute('SELECT ghost_starting_cash, ghost_cash FROM agent_settings WHERE id = 1').fetchone()
+            new_start = (Decimal(str(ag['ghost_starting_cash'])) + pending).quantize(Decimal('0.01'))
+            new_cash = (Decimal(str(ag['ghost_cash'])) + pending).quantize(Decimal('0.01'))
+            conn.execute(
+                'UPDATE agent_settings SET ghost_starting_cash = ?, ghost_cash = ? WHERE id = 1',
+                (f'{new_start:.2f}', f'{new_cash:.2f}'),
+            )
+
+            sat_nodes = conn.execute(
+                "SELECT node_id, active_capital FROM nodes WHERE status = 'ACTIVE' AND division IN ('SATELLITE_ALPHA', 'VELOCITY_BETA') ORDER BY node_id ASC"
+            ).fetchall()
+            if not sat_nodes:
+                sat_nodes = conn.execute("SELECT node_id, active_capital FROM nodes WHERE status = 'ACTIVE' ORDER BY node_id ASC").fetchall()
+
+            boost_count = len(sat_nodes)
+            per_node_boost = floor_cent(pending / Decimal(str(max(1, boost_count))))
+            remainder = (pending - (per_node_boost * Decimal(str(boost_count)))).quantize(Decimal('0.01'))
+            boosted_ids = []
+            for idx, n in enumerate(sat_nodes):
+                nid = int(n['node_id'])
+                add_amt = per_node_boost + (remainder if idx == 0 else Decimal('0.00'))
+                new_cap = (Decimal(str(n['active_capital'])) + add_amt).quantize(Decimal('0.01'))
+                conn.execute(
+                    'UPDATE nodes SET active_capital = ?, daily_starting_capital = ?, daily_settled_budget = ? WHERE node_id = ?',
+                    (f'{new_cap:.2f}', f'{new_cap:.2f}', f'{new_cap:.2f}', nid),
+                )
+                boosted_ids.append(nid)
+            conn.commit()
+            return {
+                'ok': True,
+                'consumed': f'{pending:.2f}',
+                'total_nitro_injected': f'{total_injected:.2f}',
+                'per_node_boost': f'{per_node_boost:.2f}',
+                'nodes_boosted': boost_count,
+                'boosted_node_ids': boosted_ids,
+                'new_ghost_cash': f'{new_cash:.2f}',
+                'message': f'[NITRO PROTOCOL] Supercharged {boost_count} Satellite Node(s) with +${pending:.2f} (+${per_node_boost:.2f}/node)!',
+            }
 
 
 
