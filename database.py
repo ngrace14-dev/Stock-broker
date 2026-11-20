@@ -733,8 +733,8 @@ class BrokerDatabase:
                     per_node_cap = floor_cent(cash / Decimal('5'))
                     seed_nodes = [
                         ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'NVDA', 'SOXL', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                        ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'TSLA', 'COIN', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                        ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'AMD', 'SMH', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                        ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'TSLA', 'AMD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
+                        ('SATELLITE_CRYPTO', 'CRYPTO_24_7', 'BTC/USD', 'ETH/USD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
                         ('CORE_TREND_ANCHOR', 'SWING', 'TQQQ', 'QQQ', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
                         ('CORE_TREND_ANCHOR', 'PERMANENT_ANCHOR', 'SPY', 'GLD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
                     ]
@@ -846,6 +846,53 @@ class BrokerDatabase:
                 'new_ghost_cash': f'{new_cash:.2f}',
                 'message': f'[NITRO PROTOCOL] Supercharged {boost_count} Satellite Node(s) with +${pending:.2f} (+${per_node_boost:.2f}/node)!',
             }
+
+    def scale_fleet_automatically(self):
+        """
+        Adaptive 5-Node Tandem Fleet Governor:
+        Intuitively scales active nodes up toward the 5-Node ($100/node) Tandem structure
+        (including Crypto Satellite BTC/USD & ETH/USD slots) whenever total Ghost equity
+        supports an additional $100.00 node without diluting existing nodes below $100.00.
+        """
+        summary = self.get_ghost_portfolio_summary()
+        total_eq = Decimal(str(summary['total_equity']))
+        target_blueprint = [
+            ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'NVDA', 'SOXL'),
+            ('CORE_TREND_ANCHOR', 'SWING', 'TQQQ', 'QQQ'),
+            ('SATELLITE_CRYPTO', 'CRYPTO_24_7', 'BTC/USD', 'ETH/USD'),
+            ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'TSLA', 'AMD'),
+            ('CORE_TREND_ANCHOR', 'PERMANENT_ANCHOR', 'SPY', 'GLD'),
+        ]
+        desired_nodes = min(5, max(1, int(total_eq // Decimal('100.00'))))
+        now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+        spawned = []
+        with self._lock, self._connect() as conn:
+            active_nodes = conn.execute("SELECT * FROM nodes WHERE status = 'ACTIVE' ORDER BY node_id ASC").fetchall()
+            existing_tickers = {str(n['assigned_ticker']).upper() for n in active_nodes}
+            cur_count = len(active_nodes)
+            if cur_count >= desired_nodes or cur_count >= 5:
+                return {'ok': True, 'spawned_count': 0, 'active_count': cur_count}
+
+            for div, cad, tick, btick in target_blueprint:
+                if cur_count >= desired_nodes or cur_count >= 5:
+                    break
+                if tick in existing_tickers:
+                    continue
+                cur = conn.execute(
+                    """
+                    INSERT INTO nodes (
+                        division, cadence_class, assigned_ticker, backup_ticker, status, tier,
+                        tier_starting_active_capital, active_capital, cold_storage, drip_bucket,
+                        drip_target, daily_starting_capital, daily_settled_budget, created_at
+                    ) VALUES (?, ?, ?, ?, 'ACTIVE', 0, '100.00', '100.00', '100.00', '0.00', '50.00', '100.00', '100.00', ?)
+                    """,
+                    (div, cad, tick, btick, now_utc),
+                )
+                cur_count += 1
+                existing_tickers.add(tick)
+                spawned.append({'node_id': cur.lastrowid, 'ticker': tick, 'division': div})
+            conn.commit()
+        return {'ok': True, 'spawned_count': len(spawned), 'spawned': spawned, 'active_count': cur_count}
 
 
 

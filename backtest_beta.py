@@ -135,6 +135,20 @@ STRATEGY_PROFILES = {
         'ratchet_drawdown_pct': 0.15,
         'hard_stop_pct': -0.75,
     },
+    'CRYPTO_SATELLITE_V1': {
+        'label': 'Crypto Satellite v1.0 (24/7 BTC/USD & ETH/USD: RSI 15-48 Pullback, +1.80% TP / +0.55% Ratchet / -2.80% Stop)',
+        'min_entry_rsi': 15.0,
+        'max_entry_rsi': 48.0,
+        'min_sma_spread_pct': -3.50,
+        'max_sma_spread_pct': -0.05,
+        'cooldown_ticks': 2,
+        'tp_pct': 1.80,
+        'tp_min_dollars': Decimal('0.20'),
+        'tp_rsi': 65.0,
+        'ratchet_peak_pct': 0.55,
+        'ratchet_drawdown_pct': 0.18,
+        'hard_stop_pct': -2.80,
+    },
 }
 
 
@@ -209,6 +223,56 @@ class StrategyBacktestEngine:
                                 'symbol': sym.upper(),
                                 'price': Decimal(str(b.get('c', '0'))).quantize(Decimal('0.01')),
                                 'source': f'ALPACA_HIST_{timeframe}_{days}D',
+                            })
+                    page_token = payload.get('next_page_token')
+                    if not page_token:
+                        break
+            except Exception:
+                break
+        events.sort(key=lambda x: (x['timestamp'], x['symbol']))
+        for idx, ev in enumerate(events, 1):
+            ev['pulse'] = idx
+        return events
+
+    def fetch_alpaca_crypto_historical_stream(
+        self,
+        symbols=('BTC/USD', 'ETH/USD'),
+        timeframe='1Hour',
+        days=60,
+        max_pages=4,
+    ):
+        cfg = get_broker_config()
+        if not cfg.get('has_alpaca_keys'):
+            return []
+        sym_list = ','.join(s.strip().upper() for s in symbols)
+        start_dt = (datetime.now(timezone.utc) - timedelta(days=int(days))).strftime('%Y-%m-%dT%H:%M:%SZ')
+        headers = {
+            'APCA-API-KEY-ID': cfg['alpaca_api_key'],
+            'APCA-API-SECRET-KEY': cfg['alpaca_secret_key'],
+            'Accept': 'application/json',
+            'User-Agent': 'StockBroker-v3.7-Backtester/1.0',
+        }
+        events = []
+        page_token = None
+        for _ in range(max_pages):
+            url = (
+                f"https://data.alpaca.markets/v1beta3/crypto/us/bars?"
+                f"symbols={urllib.parse.quote(sym_list)}&timeframe={timeframe}&start={start_dt}&limit=10000"
+            )
+            if page_token:
+                url += f"&page_token={urllib.parse.quote(page_token)}"
+            req = urllib.request.Request(url=url, headers=headers, method='GET')
+            try:
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    payload = json.loads(resp.read().decode('utf-8'))
+                    bars_by_sym = payload.get('bars', {})
+                    for sym, bars in bars_by_sym.items():
+                        for b in bars:
+                            events.append({
+                                'timestamp': b.get('t', ''),
+                                'symbol': sym.upper(),
+                                'price': Decimal(str(b.get('c', '0'))).quantize(Decimal('0.01')),
+                                'source': f'ALPACA_CRYPTO_HIST_{timeframe}_{days}D',
                             })
                     page_token = payload.get('next_page_token')
                     if not page_token:
@@ -633,6 +697,27 @@ if __name__ == "__main__":
                 f"| Time-Weighted Return: {nr['time_weighted_return_pct']} (Return on Initial Seed: {nr['return_on_initial_seed_pct']})\n"
                 f"    -> Trades: {nr['closed_trades']} (W:{nr['wins']} / L:{nr['losses']} = {nr['win_rate']})"
             )
+
+    crypto_bars_60d = engine.fetch_alpaca_crypto_historical_stream(
+        symbols=('BTC/USD', 'ETH/USD'),
+        timeframe='1Hour',
+        days=60,
+        max_pages=2,
+    )
+    if crypto_bars_60d:
+        print(f"\n=== [8] 60-DAY CRYPTO SATELLITE (BTC/USD & ETH/USD) vs. EQUITY FLEET AUDIT ({len(crypto_bars_60d)} Crypto Bars | $100/Node Seed) ===")
+        rc_crypto = engine.simulate_profile(crypto_bars_60d, 'CRYPTO_SATELLITE_V1', starting_cash=Decimal('100.00'), max_positions=1)
+        rc_eq = engine.simulate_profile(bars_60d, 'HYBRID_CORE_SATELLITE', starting_cash=Decimal('100.00'), max_positions=1)
+        print(
+            f"  * CRYPTO_SATELLITE_V1 (BTC/USD & ETH/USD, $100 Node) | Equity: ${rc_crypto['ending_equity']} "
+            f"(Net: ${rc_crypto['net_pnl']} / {rc_crypto['return_pct']}) | Trades: {rc_crypto['closed_trades']} "
+            f"(W:{rc_crypto['wins']} / L:{rc_crypto['losses']} = {rc_crypto['win_rate']}) | TP:{rc_crypto['take_profits']} Ratchet:{rc_crypto['ratchet_saves']} Stops:{rc_crypto['hard_stops']}"
+        )
+        print(
+            f"  * EQUITY_SATELLITE (NVDA/SPY/GLD/SCHD, $100 Node)    | Equity: ${rc_eq['ending_equity']} "
+            f"(Net: ${rc_eq['net_pnl']} / {rc_eq['return_pct']}) | Trades: {rc_eq['closed_trades']} "
+            f"(W:{rc_eq['wins']} / L:{rc_eq['losses']} = {rc_eq['win_rate']}) | TP:{rc_eq['take_profits']} Ratchet:{rc_eq['ratchet_saves']} Stops:{rc_eq['hard_stops']}"
+        )
 
 
 

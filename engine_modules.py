@@ -72,9 +72,22 @@ class VelocityBetaStrategy:
 
     def evaluate_position_action(self, symbol, current_price, existing_position=None, force_close=False):
         sym = str(symbol).strip().upper()
+        is_crypto = '/' in sym or sym in ('BTCUSD', 'ETHUSD')
         ind = self.compute_indicators(sym, current_price)
         cur_p = Decimal(str(current_price)).quantize(Decimal('0.01'))
         sma_spread = ind['sma_spread_pct']
+
+        min_rsi = 15.0 if is_crypto else 45.0
+        max_rsi = 48.0 if is_crypto else 75.0
+        min_spread = -3.50 if is_crypto else -0.50
+        max_spread = -0.05 if is_crypto else 1.00
+        tp_target_pct = 1.80 if is_crypto else 1.50
+        tp_min_dlr = Decimal('0.20') if is_crypto else Decimal('0.10')
+        tp_rsi_lvl = 65.0 if is_crypto else 70.0
+        ratchet_peak = 0.55 if is_crypto else 0.50
+        ratchet_dd = 0.18 if is_crypto else 0.15
+        hard_stop_lvl = -2.80 if is_crypto else -0.75
+        profile_tag = 'CRYPTO_SATELLITE_V1' if is_crypto else 'HYBRID_CORE_SATELLITE'
 
         if not existing_position:
             self.high_watermarks[sym] = float(cur_p)
@@ -88,11 +101,11 @@ class VelocityBetaStrategy:
                     'performance_tag': 'DISCIPLINED_FILTER',
                     'reason': f"Flat on {sym}: Post-exit cooldown active (RSI {ind['rsi']} | SMA ${ind['sma']:.2f} | Spread {sma_spread:+.2f}%) [DIAG: DISCIPLINED_FILTER]",
                 }
-            if not force_close and (ind['rsi'] < 45.0 or ind['rsi'] > 75.0 or sma_spread < -0.50 or sma_spread > 1.00):
+            if not force_close and (ind['rsi'] < min_rsi or ind['rsi'] > max_rsi or sma_spread < min_spread or sma_spread > max_spread):
                 filter_reason = (
-                    f"RSI {ind['rsi']} outside [45.0, 75.0]"
-                    if (ind['rsi'] < 45.0 or ind['rsi'] > 75.0)
-                    else f"Spread {sma_spread:+.2f}% outside [-0.50%, +1.00%]"
+                    f"RSI {ind['rsi']} outside [{min_rsi}, {max_rsi}]"
+                    if (ind['rsi'] < min_rsi or ind['rsi'] > max_rsi)
+                    else f"Spread {sma_spread:+.2f}% outside [{min_spread:+.2f}%, {max_spread:+.2f}%]"
                 )
                 return {
                     'signal': 'WAIT_OVERBOUGHT',
@@ -100,7 +113,7 @@ class VelocityBetaStrategy:
                     'should_sell': False,
                     'indicators': ind,
                     'performance_tag': 'DISCIPLINED_FILTER',
-                    'reason': f"Flat on {sym}: Waiting for Hybrid Core-Satellite window ({filter_reason} vs SMA ${ind['sma']:.2f} | Spread {sma_spread:+.2f}%) [DIAG: DISCIPLINED_FILTER]",
+                    'reason': f"Flat on {sym}: Waiting for {profile_tag} window ({filter_reason} vs SMA ${ind['sma']:.2f} | Spread {sma_spread:+.2f}%) [DIAG: DISCIPLINED_FILTER]",
                 }
             entry_tag = 'DISCIPLINED_ENTRY'
             return {
@@ -109,7 +122,7 @@ class VelocityBetaStrategy:
                 'should_sell': False,
                 'indicators': ind,
                 'performance_tag': entry_tag,
-                'reason': f"Hybrid Core-Satellite Entry on {sym} @ ${cur_p:.2f} (RSI {ind['rsi']} | SMA ${ind['sma']:.2f} | Spread {sma_spread:+.2f}%) [DIAG: {entry_tag}]",
+                'reason': f"{profile_tag} Entry on {sym} @ ${cur_p:.2f} (RSI {ind['rsi']} | SMA ${ind['sma']:.2f} | Spread {sma_spread:+.2f}%) [DIAG: {entry_tag}]",
             }
 
         entry_p = Decimal(str(existing_position.get('avg_entry_price', cur_p))).quantize(Decimal('0.01'))
@@ -139,7 +152,7 @@ class VelocityBetaStrategy:
                 'reason': f"Explicit close on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | P&L: ${pnl_dollars:.2f} / {pnl_pct:.2f}% | Peak +{peak_pct:.2f}% / Giveback {giveback_pct:.2f}%)",
             }
 
-        if pnl_pct >= 1.50 or (pnl_dollars >= Decimal('0.10') and ind['rsi'] >= 70.0):
+        if pnl_pct >= tp_target_pct or (pnl_dollars >= tp_min_dlr and ind['rsi'] >= tp_rsi_lvl):
             self.high_watermarks.pop(sym, None)
             self.cooldowns[sym] = 2
             return {
@@ -152,10 +165,10 @@ class VelocityBetaStrategy:
                 'giveback_pct': giveback_pct,
                 'performance_tag': 'STRONG_PROFIT_LOCK',
                 'indicators': ind,
-                'reason': f"Take-Profit (+1.50% Hybrid) triggered on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | Gain: +${pnl_dollars:.2f} / +{pnl_pct:.2f}% | RSI {ind['rsi']} | Spread {sma_spread:+.2f}%) [DIAG: STRONG_PROFIT_LOCK]",
+                'reason': f"Take-Profit (+{tp_target_pct:.2f}% {profile_tag}) triggered on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | Gain: +${pnl_dollars:.2f} / +{pnl_pct:.2f}% | RSI {ind['rsi']} | Spread {sma_spread:+.2f}%) [DIAG: STRONG_PROFIT_LOCK]",
             }
 
-        if peak_pct >= 0.50 and drawdown_from_hwm_pct >= 0.15 and pnl_dollars > Decimal('0.00'):
+        if peak_pct >= ratchet_peak and drawdown_from_hwm_pct >= ratchet_dd and pnl_dollars > Decimal('0.00'):
             self.high_watermarks.pop(sym, None)
             self.cooldowns[sym] = 2
             return {
@@ -171,7 +184,7 @@ class VelocityBetaStrategy:
                 'reason': f"Trailing Ratchet locked profit on {sym} @ ${cur_p:.2f} (HWM ${hwm:.2f} | Gain: +${pnl_dollars:.2f} / +{pnl_pct:.2f}% | Giveback {giveback_pct:.2f}%) [DIAG: STRONG_RATCHET_SAVE]",
             }
 
-        if pnl_pct <= -0.75:
+        if pnl_pct <= hard_stop_lvl:
             self.high_watermarks.pop(sym, None)
             self.cooldowns[sym] = 2
             stop_tag = 'WEAK_REVERSAL_FROM_PEAK' if peak_pct >= 0.15 else 'WEAK_HARD_STOP'
@@ -185,7 +198,7 @@ class VelocityBetaStrategy:
                 'giveback_pct': giveback_pct,
                 'performance_tag': stop_tag,
                 'indicators': ind,
-                'reason': f"Hard Stop-Loss (-0.75% Hybrid 2:1) triggered on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | P&L: ${pnl_dollars:.2f} / {pnl_pct:.2f}% | Peak +{peak_pct:.2f}% / Giveback {giveback_pct:.2f}%) [DIAG: {stop_tag}]",
+                'reason': f"Hard Stop-Loss ({hard_stop_lvl:.2f}% {profile_tag}) triggered on {sym} @ ${cur_p:.2f} (Entry ${entry_p:.2f} | P&L: ${pnl_dollars:.2f} / {pnl_pct:.2f}% | Peak +{peak_pct:.2f}% / Giveback {giveback_pct:.2f}%) [DIAG: {stop_tag}]",
             }
 
         if peak_pct >= 0.20 and pnl_pct <= 0.0:

@@ -176,7 +176,8 @@ class ExecutionEngine:
 
     def get_market_quote(self, symbol, fallback_price=None):
         """
-        Fetch real-time market price for a ticker from Alpaca Market Data API v2
+        Fetch real-time market price for a ticker (Equities via Alpaca Market Data v2,
+        Crypto pairs like BTC/USD and ETH/USD via Alpaca Crypto Data v1beta3)
         so the Ghost Portfolio cannot lie about entry/exit prices.
         """
         symbol = str(symbol).strip().upper()
@@ -193,28 +194,48 @@ class ExecutionEngine:
             'SCHD': Decimal('28.90'),
             'VYM': Decimal('129.60'),
             'AAPL': Decimal('228.50'),
+            'BTC/USD': Decimal('95000.00'),
+            'ETH/USD': Decimal('3200.00'),
         }
+        is_crypto = '/' in symbol or symbol in ('BTCUSD', 'ETHUSD')
         if self.config['has_alpaca_keys']:
-            data_url = f"https://data.alpaca.markets/v2/stocks/{urllib.parse.quote(symbol)}/trades/latest"
             headers = {
                 'APCA-API-KEY-ID': self.config['alpaca_api_key'],
                 'APCA-API-SECRET-KEY': self.config['alpaca_secret_key'],
                 'Accept': 'application/json',
                 'User-Agent': 'StockBroker-v3.7/1.0',
             }
-            req = urllib.request.Request(url=data_url, headers=headers, method='GET')
-            try:
-                with urllib.request.urlopen(req, timeout=6) as resp:
-                    payload = json.loads(resp.read().decode('utf-8'))
-                    trade_price = payload.get('trade', {}).get('p')
-                    if trade_price:
-                        return {
-                            'symbol': symbol,
-                            'price': Decimal(str(trade_price)).quantize(Decimal('0.01')),
-                            'source': 'ALPACA_MARKET_DATA_V2_LIVE',
-                        }
-            except Exception as exc:
-                self.logger.debug(f'Market data quote fallback for {symbol}: {exc}')
+            if is_crypto:
+                norm_sym = symbol if '/' in symbol else f'{symbol[:3]}/{symbol[3:]}'
+                crypto_url = f"https://data.alpaca.markets/v1beta3/crypto/us/latest/trades?symbols={urllib.parse.quote(norm_sym)}"
+                req = urllib.request.Request(url=crypto_url, headers=headers, method='GET')
+                try:
+                    with urllib.request.urlopen(req, timeout=6) as resp:
+                        payload = json.loads(resp.read().decode('utf-8'))
+                        trade_price = payload.get('trades', {}).get(norm_sym, {}).get('p')
+                        if trade_price:
+                            return {
+                                'symbol': symbol,
+                                'price': Decimal(str(trade_price)).quantize(Decimal('0.01')),
+                                'source': 'ALPACA_CRYPTO_V1BETA3_LIVE',
+                            }
+                except Exception as exc:
+                    self.logger.debug(f'Crypto data quote fallback for {symbol}: {exc}')
+            else:
+                data_url = f"https://data.alpaca.markets/v2/stocks/{urllib.parse.quote(symbol)}/trades/latest"
+                req = urllib.request.Request(url=data_url, headers=headers, method='GET')
+                try:
+                    with urllib.request.urlopen(req, timeout=6) as resp:
+                        payload = json.loads(resp.read().decode('utf-8'))
+                        trade_price = payload.get('trade', {}).get('p')
+                        if trade_price:
+                            return {
+                                'symbol': symbol,
+                                'price': Decimal(str(trade_price)).quantize(Decimal('0.01')),
+                                'source': 'ALPACA_MARKET_DATA_V2_LIVE',
+                            }
+                except Exception as exc:
+                    self.logger.debug(f'Market data quote fallback for {symbol}: {exc}')
 
         base = Decimal(str(fallback_price)) if fallback_price else default_anchors.get(symbol, Decimal('100.00'))
         return {

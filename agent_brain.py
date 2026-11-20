@@ -48,6 +48,10 @@ class AutonomousAgentBrain:
         nitro_res = self.db.consume_pending_nitro_injection()
         if Decimal(str(nitro_res.get('consumed', '0.00'))) > Decimal('0.00'):
             self._log_reasoning(0, 'NITRO_VAULT', 'NITRO_SUPERCHARGE', nitro_res['message'])
+        scale_res = self.db.scale_fleet_automatically()
+        if scale_res.get('spawned_count', 0) > 0:
+            sp_str = ', '.join(f"#{s['node_id']} ({s['ticker']})" for s in scale_res.get('spawned', []))
+            self._log_reasoning(0, 'ADAPTIVE_FLEET', 'AUTO_SCALE_SPAWN', f"Adaptive Fleet Governor spawned {scale_res['spawned_count']} new $100 Node(s): {sp_str}")
         settings = self.db.get_agent_settings()
         fund_gate_open = settings['fund_gate_enabled']
         exec_mode = settings['execution_mode']
