@@ -729,23 +729,33 @@ class BrokerDatabase:
             )
             if reset_nodes:
                 conn.execute('DELETE FROM nodes')
-                if cash >= Decimal('500.00'):
-                    per_node_cap = floor_cent(cash / Decimal('5'))
-                    seed_nodes = [
-                        ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'NVDA', 'SOXL', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                        ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'TSLA', 'AMD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                        ('SATELLITE_CRYPTO', 'CRYPTO_24_7', 'BTC/USD', 'ETH/USD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                        ('CORE_TREND_ANCHOR', 'SWING', 'TQQQ', 'QQQ', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                        ('CORE_TREND_ANCHOR', 'PERMANENT_ANCHOR', 'SPY', 'GLD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                    ]
-                else:
-                    per_node_cap = max(Decimal('6.25'), floor_cent(cash / Decimal('4')))
-                    seed_nodes = [
-                        ('VELOCITY_BETA', 'HIGH_VELOCITY', 'NVDA', 'AMD', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                        ('HARDWARE_TECH', 'SWING', 'SPY', 'QQQ', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                        ('PRECIOUS_METALS', 'MACRO_CYCLICAL', 'GLD', 'SLV', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                        ('DIVIDEND_INSURER', 'PERMANENT_ANCHOR', 'SCHD', 'VYM', 'ACTIVE', 0, f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', f'{per_node_cap:.2f}', '0.00', '50.00'),
-                    ]
+                target_nodes, per_node_cap, scale_tier = self._compute_optimal_node_topology(cash)
+                blueprint = [
+                    ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'NVDA', 'SOXL'),
+                    ('CORE_TREND_ANCHOR', 'SWING', 'TQQQ', 'QQQ'),
+                    ('SATELLITE_CRYPTO', 'CRYPTO_24_7', 'BTC/USD', 'ETH/USD'),
+                    ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'TSLA', 'AMD'),
+                    ('CORE_TREND_ANCHOR', 'PERMANENT_ANCHOR', 'SPY', 'GLD'),
+                ]
+                seed_nodes = []
+                for idx in range(target_nodes):
+                    div, cad, tick, btick = blueprint[idx % len(blueprint)]
+                    if idx >= len(blueprint):
+                        tick = f"{tick}"
+                    drip_t = max(Decimal('50.00'), floor_cent(per_node_cap * Decimal('0.50')))
+                    seed_nodes.append((
+                        div,
+                        cad,
+                        tick,
+                        btick,
+                        'ACTIVE',
+                        0,
+                        f'{per_node_cap:.2f}',
+                        f'{per_node_cap:.2f}',
+                        f'{per_node_cap:.2f}',
+                        '0.00',
+                        f'{drip_t:.2f}',
+                    ))
                 for div, cad, tick, btick, st, tier, start_cap, act_cap, cold, drip, target in seed_nodes:
                     conn.execute(
                         """
@@ -847,15 +857,35 @@ class BrokerDatabase:
                 'message': f'[NITRO PROTOCOL] Supercharged {boost_count} Satellite Node(s) with +${pending:.2f} (+${per_node_boost:.2f}/node)!',
             }
 
+    @staticmethod
+    def _compute_optimal_node_topology(total_equity):
+        """
+        Infinite-Scale Adaptive Fleet Topology ($25.00 to $1,000,000,000,000+):
+        - < $200.00 (e.g. $25.00 Micro-Seed): Consolidates 100% into 1 High-Conviction Sniper Node
+          to eliminate transaction friction drag until equity reaches $200.00+.
+        - $200.00 - $499.99: Scales linearly at 1 node per $100.00 (2 to 4 nodes).
+        - $500.00 - $1,000,000,000,000+ (Trillion-Scale): Operates the 5-Node Tandem Core-Satellite
+          architecture, scaling per-node capital and drip targets proportionally without ceilings.
+        """
+        eq = Decimal(str(total_equity)).quantize(Decimal('0.01'))
+        if eq < Decimal('200.00'):
+            return 1, eq, 'CONSOLIDATED_1_NODE_SNIPER'
+        if eq < Decimal('500.00'):
+            n_cnt = int(eq // Decimal('100.00'))
+            return n_cnt, floor_cent(eq / Decimal(str(n_cnt))), f'BRANCHING_{n_cnt}_NODE_FLEET'
+        n_cnt = 5
+        if eq >= Decimal('1000000000.00'):
+            tier_label = 'SOVEREIGN_TRILLION_5_NODE_TANDEM'
+        elif eq >= Decimal('1000000.00'):
+            tier_label = 'INSTITUTIONAL_MILLION_5_NODE_TANDEM'
+        else:
+            tier_label = 'TANDEM_5_NODE_HYBRID_FLEET'
+        return n_cnt, floor_cent(eq / Decimal(str(n_cnt))), tier_label
+
     def scale_fleet_automatically(self):
-        """
-        Adaptive 5-Node Tandem Fleet Governor:
-        Intuitively scales active nodes up toward the 5-Node ($100/node) Tandem structure
-        (including Crypto Satellite BTC/USD & ETH/USD slots) whenever total Ghost equity
-        supports an additional $100.00 node without diluting existing nodes below $100.00.
-        """
         summary = self.get_ghost_portfolio_summary()
         total_eq = Decimal(str(summary['total_equity']))
+        target_nodes, per_node_cap, scale_tier = self._compute_optimal_node_topology(total_eq)
         target_blueprint = [
             ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'NVDA', 'SOXL'),
             ('CORE_TREND_ANCHOR', 'SWING', 'TQQQ', 'QQQ'),
@@ -863,18 +893,40 @@ class BrokerDatabase:
             ('SATELLITE_ALPHA', 'HIGH_VELOCITY', 'TSLA', 'AMD'),
             ('CORE_TREND_ANCHOR', 'PERMANENT_ANCHOR', 'SPY', 'GLD'),
         ]
-        desired_nodes = min(5, max(1, int(total_eq // Decimal('100.00'))))
         now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
         spawned = []
+        consolidated = []
         with self._lock, self._connect() as conn:
             active_nodes = conn.execute("SELECT * FROM nodes WHERE status = 'ACTIVE' ORDER BY node_id ASC").fetchall()
-            existing_tickers = {str(n['assigned_ticker']).upper() for n in active_nodes}
             cur_count = len(active_nodes)
-            if cur_count >= desired_nodes or cur_count >= 5:
-                return {'ok': True, 'spawned_count': 0, 'active_count': cur_count}
 
+            if cur_count > target_nodes and target_nodes == 1:
+                primary = active_nodes[0]
+                for extra in active_nodes[1:]:
+                    conn.execute(
+                        "UPDATE nodes SET status = 'STANDBY_CONSOLIDATED', active_capital = '0.00' WHERE node_id = ?",
+                        (int(extra['node_id']),),
+                    )
+                    consolidated.append({'node_id': extra['node_id'], 'ticker': extra['assigned_ticker']})
+                conn.execute(
+                    "UPDATE nodes SET active_capital = ?, daily_starting_capital = ?, daily_settled_budget = ? WHERE node_id = ?",
+                    (f'{total_eq:.2f}', f'{total_eq:.2f}', f'{total_eq:.2f}', int(primary['node_id'])),
+                )
+                conn.commit()
+                return {
+                    'ok': True,
+                    'scale_tier': scale_tier,
+                    'spawned_count': 0,
+                    'consolidated_count': len(consolidated),
+                    'consolidated': consolidated,
+                    'active_count': 1,
+                    'per_node_capital': f'{total_eq:.2f}',
+                }
+
+            existing_tickers = {str(n['assigned_ticker']).upper() for n in active_nodes}
+            drip_t = max(Decimal('50.00'), floor_cent(per_node_cap * Decimal('0.50')))
             for div, cad, tick, btick in target_blueprint:
-                if cur_count >= desired_nodes or cur_count >= 5:
+                if cur_count >= target_nodes:
                     break
                 if tick in existing_tickers:
                     continue
@@ -884,15 +936,43 @@ class BrokerDatabase:
                         division, cadence_class, assigned_ticker, backup_ticker, status, tier,
                         tier_starting_active_capital, active_capital, cold_storage, drip_bucket,
                         drip_target, daily_starting_capital, daily_settled_budget, created_at
-                    ) VALUES (?, ?, ?, ?, 'ACTIVE', 0, '100.00', '100.00', '100.00', '0.00', '50.00', '100.00', '100.00', ?)
+                    ) VALUES (?, ?, ?, ?, 'ACTIVE', 0, ?, ?, ?, '0.00', ?, ?, ?, ?)
                     """,
-                    (div, cad, tick, btick, now_utc),
+                    (
+                        div,
+                        cad,
+                        tick,
+                        btick,
+                        f'{per_node_cap:.2f}',
+                        f'{per_node_cap:.2f}',
+                        f'{per_node_cap:.2f}',
+                        f'{drip_t:.2f}',
+                        f'{per_node_cap:.2f}',
+                        f'{per_node_cap:.2f}',
+                        now_utc,
+                    ),
                 )
                 cur_count += 1
                 existing_tickers.add(tick)
                 spawned.append({'node_id': cur.lastrowid, 'ticker': tick, 'division': div})
+
+            if spawned:
+                for n in active_nodes:
+                    if Decimal(str(n['active_capital'])) > per_node_cap:
+                        conn.execute(
+                            "UPDATE nodes SET active_capital = ?, drip_target = ? WHERE node_id = ?",
+                            (f'{per_node_cap:.2f}', f'{drip_t:.2f}', int(n['node_id'])),
+                        )
             conn.commit()
-        return {'ok': True, 'spawned_count': len(spawned), 'spawned': spawned, 'active_count': cur_count}
+        return {
+            'ok': True,
+            'scale_tier': scale_tier,
+            'spawned_count': len(spawned),
+            'spawned': spawned,
+            'consolidated_count': 0,
+            'active_count': cur_count,
+            'per_node_capital': f'{per_node_cap:.2f}',
+        }
 
 
 

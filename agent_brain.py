@@ -49,9 +49,21 @@ class AutonomousAgentBrain:
         if Decimal(str(nitro_res.get('consumed', '0.00'))) > Decimal('0.00'):
             self._log_reasoning(0, 'NITRO_VAULT', 'NITRO_SUPERCHARGE', nitro_res['message'])
         scale_res = self.db.scale_fleet_automatically()
-        if scale_res.get('spawned_count', 0) > 0:
+        if scale_res.get('consolidated_count', 0) > 0:
+            self._log_reasoning(
+                0,
+                'ADAPTIVE_FLEET',
+                'MICRO_SEED_CONSOLIDATED',
+                f"Adaptive Fleet Governor [{scale_res.get('scale_tier')}]: Consolidated capital into 1 High-Conviction Sniper Node (${scale_res.get('per_node_capital')}) until equity crosses $200.00 branching threshold.",
+            )
+        elif scale_res.get('spawned_count', 0) > 0:
             sp_str = ', '.join(f"#{s['node_id']} ({s['ticker']})" for s in scale_res.get('spawned', []))
-            self._log_reasoning(0, 'ADAPTIVE_FLEET', 'AUTO_SCALE_SPAWN', f"Adaptive Fleet Governor spawned {scale_res['spawned_count']} new $100 Node(s): {sp_str}")
+            self._log_reasoning(
+                0,
+                'ADAPTIVE_FLEET',
+                'AUTO_SCALE_SPAWN',
+                f"Adaptive Fleet Governor [{scale_res.get('scale_tier')}] spawned {scale_res['spawned_count']} new Node(s) @ ${scale_res.get('per_node_capital')}/node: {sp_str}",
+            )
         settings = self.db.get_agent_settings()
         fund_gate_open = settings['fund_gate_enabled']
         exec_mode = settings['execution_mode']
