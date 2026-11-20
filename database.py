@@ -703,7 +703,7 @@ class BrokerDatabase:
             'message': f'[GHOST PORTFOLIO] {side.upper()} {qty_dec} {symbol} @ ${price_dec:.2f} ({price_source}) | Realized P&L: ${realized_pnl:.2f} | SHA256: {audit_hash}',
         }
 
-    def reset_ghost_portfolio(self, starting_cash='25.00', reset_nodes=True):
+    def reset_ghost_portfolio(self, starting_cash='100.00', reset_nodes=True):
         """
         Hard-reset the Ghost Portfolio to a user-chosen starting capital (e.g., $25.00 checkpoint seed).
         Wipes all prior ghost positions, ghost trades, and test artifacts so overnight results are 100% pure.

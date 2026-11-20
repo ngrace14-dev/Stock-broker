@@ -465,7 +465,7 @@ def handle_api_post(path, payload):
         res = broker_service.agent_brain.deploy_fleet_investments(requested_mode=req_mode)
         return res
     if path == '/api/ghost-reset':
-        starting_cash = payload.get('starting_cash', '25.00')
+        starting_cash = payload.get('starting_cash', '100.00')
         reset_nodes = bool(payload.get('reset_nodes', True))
         res = broker_service.db.reset_ghost_portfolio(starting_cash=starting_cash, reset_nodes=reset_nodes)
         broker_service.agent_brain.pulse_count = 0
