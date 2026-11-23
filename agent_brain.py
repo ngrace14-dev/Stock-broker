@@ -21,11 +21,20 @@ class AutonomousAgentBrain:
         self.service = broker_service
         self.db = broker_service.db
         self.execution = broker_service.execution
-        self.pulse_count = 0
+        self.pulse_count = self._load_initial_pulse_count()
         self.last_decision_summary = 'Autonomous Agent initialized and observing market.'
         self.reasoning_stream = []
         self._stop_event = threading.Event()
         self._thread = None
+
+    def _load_initial_pulse_count(self):
+        try:
+            logs = self.db.get_market_pulse_audit_log(limit=1)
+            if logs:
+                return int(logs[0].get('pulse_number', 0))
+        except Exception:
+            pass
+        return 0
 
     def _log_reasoning(self, node_id, ticker, action, detail):
         entry = {
@@ -273,8 +282,9 @@ class AutonomousAgentBrain:
         if requested_mode:
             req_mode = str(requested_mode).strip().upper()
             if req_mode in ('GHOST', 'LIVE'):
-                self.db.update_agent_settings(execution_mode=req_mode)
+                self.db.update_agent_settings(execution_mode=req_mode, autonomous_loop_enabled=True)
 
+        self.db.scale_fleet_automatically()
         settings = self.db.get_agent_settings()
         fund_gate_open = bool(settings['fund_gate_enabled'])
         exec_mode = str(settings['execution_mode']).upper()
@@ -293,6 +303,7 @@ class AutonomousAgentBrain:
         ghost_summary = self.db.get_ghost_portfolio_summary()
         open_ghost_map = {p['symbol']: p for p in ghost_summary['positions']}
         open_live_map = {p['symbol']: p for p in self.execution.get_positions()}
+        mode_tag = 'LIVE_BROKER' if (exec_mode == 'LIVE' and fund_gate_open) else 'GHOST_PORTFOLIO'
 
         deployed = []
         for node in nodes:
@@ -303,7 +314,28 @@ class AutonomousAgentBrain:
 
             if exec_mode == 'GHOST':
                 if ticker in open_ghost_map:
-                    self.db.mark_ghost_position_to_market(ticker, market_price)
+                    marked = self.db.mark_ghost_position_to_market(ticker, market_price)
+                    self.pulse_count += 1
+                    ind = self.service.strategy.compute_indicators(ticker, market_price)
+                    qty_open = marked['qty'] if marked else open_ghost_map[ticker]['qty']
+                    avg_entry = marked['avg_entry_price'] if marked else open_ghost_map[ticker]['avg_entry_price']
+                    unrl_pct = marked['unrealized_pnl_pct'] if marked else open_ghost_map[ticker].get('unrealized_pnl_pct', '0.00')
+                    detail = (
+                        f"Active Ghost Fleet Marked-to-Market: Holding {qty_open} {ticker} @ ${market_price:.2f} "
+                        f"(Entry ${avg_entry} | MTM {unrl_pct}%) [{quote['source']}] [DIAG: ACTIVE_FLEET_SYNC]"
+                    )
+                    self._record_pulse_audit(
+                        node_id=node_id,
+                        ticker=ticker,
+                        market_price=market_price,
+                        price_source=quote['source'],
+                        ind=ind,
+                        pos_state=f'INVESTED ({qty_open} @ ${avg_entry})',
+                        action=f'FLEET_SYNC ({mode_tag})',
+                        qty=str(qty_open),
+                        reason=detail,
+                    )
+                    self._log_reasoning(node_id, ticker, f'FLEET_SYNC ({mode_tag})', detail)
                     deployed.append({'node_id': node_id, 'ticker': ticker, 'action': 'MARKED_TO_MARKET', 'price': f'{market_price:.2f}'})
                     continue
             else:

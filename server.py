@@ -576,24 +576,28 @@ class BrokerHTTPRequestHandler(BaseHTTPRequestHandler):
         authorized, extra_headers = self._check_auth(parsed)
         if not authorized:
             return
-        if parsed.path in ('/', '/index.html'):
-            if TEMPLATE_PATH.exists():
-                self._send_html(TEMPLATE_PATH.read_text(encoding='utf-8'), extra_headers=extra_headers)
-            else:
-                self._send_html('<h1>Template missing</h1>', status=500, extra_headers=extra_headers)
-            return
-        if parsed.path == '/api/state':
-            self._send_json(broker_service.get_dashboard_state(), extra_headers=extra_headers)
-            return
-        if parsed.path == '/api/ledger/reconciliation':
-            acct = broker_service.execution.get_account_summary()
-            pos = broker_service.execution.get_positions()
-            self._send_json(broker_service.get_ledger_reconciliation(acct, pos), extra_headers=extra_headers)
-            return
-        if parsed.path == '/api/health':
-            self._send_json({'status': 'ok', 'version': 'v3.7 DEFCON 0'}, extra_headers=extra_headers)
-            return
-        self._send_json({'error': 'Not found'}, status=404, extra_headers=extra_headers)
+        try:
+            if parsed.path in ('/', '/index.html'):
+                if TEMPLATE_PATH.exists():
+                    self._send_html(TEMPLATE_PATH.read_text(encoding='utf-8'), extra_headers=extra_headers)
+                else:
+                    self._send_html('<h1>Template missing</h1>', status=500, extra_headers=extra_headers)
+                return
+            if parsed.path == '/api/state':
+                self._send_json(broker_service.get_dashboard_state(), extra_headers=extra_headers)
+                return
+            if parsed.path == '/api/ledger/reconciliation':
+                acct = broker_service.execution.get_account_summary()
+                pos = broker_service.execution.get_positions()
+                self._send_json(broker_service.get_ledger_reconciliation(acct, pos), extra_headers=extra_headers)
+                return
+            if parsed.path == '/api/health':
+                self._send_json({'status': 'ok', 'version': 'v3.7 DEFCON 0'}, extra_headers=extra_headers)
+                return
+            self._send_json({'error': 'Not found'}, status=404, extra_headers=extra_headers)
+        except Exception as exc:
+            logger.exception('API GET error')
+            self._send_json({'ok': False, 'error': str(exc)}, status=500, extra_headers=extra_headers)
 
     def do_POST(self):
         parsed = urlparse(self.path)
